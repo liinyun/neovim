@@ -240,7 +240,7 @@ function Provider:on_win(toprow, botrow)
           local range = vim.range.lsp(bufnr, lenses[1].range, client.offset_encoding)
           ---@type [string, string][]
           local virt_text = {
-            { string.rep(' ', range.start_col), 'LspCodeLensSeparator' },
+            { ' ', 'LspCodeLensSeparator' },
           }
 
           for _, lens in ipairs(lenses) do
@@ -263,9 +263,11 @@ function Provider:on_win(toprow, botrow)
           end
 
           api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
-            virt_lines = { virt_text },
-            virt_lines_above = true,
-            virt_lines_overflow = 'scroll',
+            -- virt_lines = { virt_text },
+            virt_text = virt_text,
+            virt_text_pos = 'eol',
+            -- virt_lines_above = true,
+            -- virt_lines_overflow = 'scroll',
             hl_mode = 'combine',
           })
 
