@@ -39,12 +39,14 @@ Capability.all[Provider.name] = Provider
 ---@param bufnr integer
 ---@return vim.lsp.codelens.Provider
 function Provider:new(bufnr)
+  -- print('Provider:new')
   ---@type vim.lsp.codelens.Provider
   self = Capability.new(self, bufnr)
   self.client_state = {}
   self.row_version = {}
 
   api.nvim_buf_attach(bufnr, false, {
+    -- print('nvim_buf_attach'),
     on_lines = function(_, buf)
       local provider = Provider.active[buf]
       if not provider then
@@ -222,15 +224,27 @@ end
 ---@param toprow integer
 ---@param botrow integer
 function Provider:on_win(toprow, botrow)
+  -- print('Provider:on_win')
   for row = toprow, botrow do
+    -- print('row = ', row)
+    -- print('self.row_version[row] = ', self.row_version[row])
+    -- print('self.version = ', self.version)
     if self.row_version[row] ~= self.version then
+      -- print('self.client_state = ', self.client_state)
       for client_id, state in pairs(self.client_state) do
+        -- print('state = ', state)
+
         local bufnr = self.bufnr
         local namespace = state.namespace
+        -- print('self.row_version[row] ~= self.version')
 
         api.nvim_buf_clear_namespace(bufnr, namespace, row, row + 1)
 
         local lenses = state.row_lenses[row]
+        -- print('lenses is :', vim.inspect(lenses))
+        -- print('lenses is ', lenses)
+        -- print('state.row_lenses[row] = ', state.row_lenses[row])
+
         if lenses then
           table.sort(lenses, function(a, b)
             return a.range.start.character < b.range.start.character
@@ -258,9 +272,9 @@ function Provider:on_win(toprow, botrow)
           table.remove(virt_text)
 
           -- Use a placeholder to prevent flickering caused by layout shifts.
-          if #virt_text == 1 then
-            table.insert(virt_text, { '', 'LspCodeLens' })
-          end
+          -- if #virt_text == 1 then
+          --   table.insert(virt_text, { '', 'LspCodeLens' })
+          -- end
 
           api.nvim_buf_set_extmark(bufnr, namespace, row, 0, {
             -- virt_lines = { virt_text },
