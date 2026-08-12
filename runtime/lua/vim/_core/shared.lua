@@ -64,6 +64,31 @@ function vim.deepcopy(orig, noref)
   return deepcopy(orig, not noref and {} or nil)
 end
 
+--- Returns a shallow copy of `orig`.
+---
+--- Non-table values are returned as-is. Table keys and values are copied by
+--- reference, and the original metatable is preserved. Use |vim.deepcopy()|
+--- for a recursive copy.
+---
+--- @nodoc
+--- @generic T
+--- @param orig T
+--- @return T
+function vim._copy(orig)
+  if type(orig) ~= 'table' then
+    return orig
+  end
+
+  --- @cast orig table<any,any>
+
+  local copy = {} --- @type table<any,any>
+  for k, v in pairs(orig) do
+    copy[k] = v
+  end
+
+  return setmetatable(copy, getmetatable(orig))
+end
+
 --- @class vim.gsplit.Opts
 --- @inlinedoc
 ---
@@ -618,8 +643,8 @@ end
 ---
 ---@param behavior 'error'|'keep'|'force'|fun(key:any, prev_value:any?, value:any): any Decides what to do if a key is found in more than one map:
 ---      - "error": raise an error
----      - "keep":  use value from the leftmost map
 ---      - "force": use value from the rightmost map
+---      - "keep":  use value from the leftmost map
 ---      - If a function, it receives the current key, the previous value in the currently merged table (if present), the current value and should
 ---        return the value for the given key in the merged table.
 ---@param ... table Two or more tables
@@ -651,8 +676,8 @@ end
 ---@generic T2: table
 ---@param behavior 'error'|'keep'|'force'|fun(key:any, prev_value:any?, value:any): any Decides what to do if a key is found in more than one map:
 ---      - "error": raise an error
----      - "keep":  use value from the leftmost map
 ---      - "force": use value from the rightmost map
+---      - "keep":  use value from the leftmost map
 ---      - If a function, it receives the current key, the previous value in the currently merged table (if present), the current value and should
 ---        return the value for the given key in the merged table.
 ---@param ... T2 Two or more tables
@@ -661,36 +686,63 @@ function vim.tbl_deep_extend(behavior, ...)
   return tbl_extend(behavior, true, ...)
 end
 
+---@param left any
+---@param right any
+---@param seen? table<table, table<table, boolean>>
+---@return boolean
+local function deep_equal(left, right, seen)
+  if left == right then
+    return true
+  end
+
+  if type(left) ~= type(right) then
+    return false
+  end
+
+  if type(left) ~= 'table' then
+    return false
+  end
+
+  ---@cast left table<any, any>
+  ---@cast right table<any, any>
+  seen = seen or {}
+  local seen_left = seen[left]
+  if seen_left and seen_left[right] ~= nil then
+    return seen_left[right]
+  end
+
+  seen_left = seen_left or {}
+  seen[left] = seen_left
+  -- Assume equality while descending so recursive structures can terminate.
+  seen_left[right] = true
+
+  for k, v in pairs(left) do
+    if not deep_equal(v, right[k], seen) then
+      seen_left[right] = false
+      return false
+    end
+  end
+
+  for k in pairs(right) do
+    if left[k] == nil then
+      seen_left[right] = false
+      return false
+    end
+  end
+
+  return true
+end
+
 --- Deep compare values for equality
 ---
 --- Tables are compared recursively unless they both provide the `eq` metamethod.
 --- All other types are compared using the equality `==` operator.
+--- Cyclic tables are supported.
 ---@param a any First value
 ---@param b any Second value
 ---@return boolean `true` if values are equals, else `false`
 function vim.deep_equal(a, b)
-  if a == b then
-    return true
-  end
-  if type(a) ~= type(b) then
-    return false
-  end
-  if type(a) == 'table' then
-    --- @cast a table<any,any>
-    --- @cast b table<any,any>
-    for k, v in pairs(a) do
-      if not vim.deep_equal(v, b[k]) then
-        return false
-      end
-    end
-    for k in pairs(b) do
-      if a[k] == nil then
-        return false
-      end
-    end
-    return true
-  end
-  return false
+  return deep_equal(a, b)
 end
 
 --- Add the reverse lookup values to an existing table.
@@ -908,7 +960,7 @@ function vim.islist(t)
   for _ in
     pairs(t--[[@as table<any,any>]])
   do
-    if t[j] == nil then
+    if rawget(t, j) == nil then
       return false
     end
     j = j + 1
@@ -1557,6 +1609,7 @@ function vim._with(context, f)
     if not vim.api.nvim_buf_is_valid(context.buf) then
       error('Invalid buffer id: ' .. context.buf)
     end
+    context.buf = context.buf == 0 and vim.api.nvim_get_current_buf() or context.buf
   end
 
   -- Check window exists
@@ -1568,6 +1621,7 @@ function vim._with(context, f)
     if context.buf and vim.api.nvim_win_get_buf(context.win) ~= context.buf then
       error('Can not set both `buf` and `win` context.')
     end
+    context.win = context.win == 0 and vim.api.nvim_get_current_win() or context.win
   end
 
   -- Decorate so that save-set-restore options is done in correct window-buffer
@@ -1615,14 +1669,14 @@ function vim._with(context, f)
   return vim._with_c(context, callback)
 end
 
---- @param bufnr? integer
+--- @param buf? integer
 --- @return integer
-function vim._resolve_bufnr(bufnr)
-  if bufnr == nil or bufnr == 0 then
+function vim._resolve_bufnr(buf)
+  if buf == nil or buf == 0 then
     return vim.api.nvim_get_current_buf()
   end
-  vim.validate('bufnr', bufnr, 'number')
-  return bufnr
+  vim.validate('buf', buf, 'number')
+  return buf
 end
 
 --- @generic T

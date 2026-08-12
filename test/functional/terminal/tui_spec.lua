@@ -23,7 +23,6 @@ local ok = t.ok
 local read_file = t.read_file
 local fn = n.fn
 local api = n.api
-local is_ci = t.is_ci
 local is_os = t.is_os
 local new_pipename = n.new_pipename
 local set_session = n.set_session
@@ -112,12 +111,45 @@ describe('TUI', function()
     feed_data(':')
     screen:expect(s1)
   end)
+
+  it('jobstart child writing to CON does not leak to screen', function()
+    -- A child job that writes to CON must not leak onto the TUI screen. The
+    -- embedded server AttachConsole()'s the parent terminal (so server io.stdout
+    -- e.g. SIXEL works), but jobs must get their own (windowless) console so
+    -- writes to CON go nowhere visible.
+    t.skip(not is_os('win'), 'N/A Windows only')
+    n.clear()
+    finally(function()
+      n.check_close()
+    end)
+
+    local screen = tt.setup_child_nvim({
+      '--clean',
+      '--cmd',
+      'colorscheme vim',
+      '--cmd',
+      nvim_set .. ' laststatus=2 background=dark',
+    }, { env = env_notermguicolors })
+    tt.override_screen_expect_for_conpty(screen)
+
+    feed_data('iZZZSENTINEL')
+
+    -- Leave insert mode and run a job that writes directly to CON, blocking
+    -- until it finishes. The CON output must not appear anywhere on screen.
+    feed_data("\027\027:call jobwait([jobstart(['cmd', '/c', 'echo LEAKEDXYZ > CON'])])\013")
+
+    screen:expect([[
+      ZZZSENTINE^L                                       |
+      {100:~                                                 }|*3
+      {3:[No Name] [+]                                     }|
+                                                        |
+      {5:-- TERMINAL --}                                    |
+    ]])
+  end)
 end)
 
 describe('TUI :detach', function()
   it('does not stop server', function()
-    local job_opts = { env = t.shallowcopy(env_notermguicolors) }
-
     n.clear()
     finally(function()
       n.check_close()
@@ -135,7 +167,7 @@ describe('TUI :detach', function()
       'colorscheme vim',
       '--cmd',
       nvim_set .. ' laststatus=2 background=dark',
-    }, job_opts)
+    }, { env = env_notermguicolors })
     tt.override_screen_expect_for_conpty(screen)
 
     tt.feed_data('iHello, World')
@@ -192,7 +224,7 @@ describe('TUI :detach', function()
       '--remote-ui',
       '--server',
       child_server,
-    }, job_opts)
+    }, { env = env_notermguicolors })
 
     screen_reattached:expect([[
       We did it, pooky^.                                 |
@@ -208,32 +240,209 @@ describe('TUI :restart', function()
   before_each(n.clear)
   after_each(n.check_close)
 
+  --- Asserts that the server at `addr` has (or has not) restarted since `starttime`.
+  ---@param starttime integer v:starttime of the server before restart
+  ---@param sess table Session
+  ---@param addr string
+  ---@return integer starttime
+  ---@return table session
+  local function assert_restarted(starttime, sess, addr)
+    sess:close()
+    local new_starttime
+    -- Retry: old server may still be alive (connect succeeds but yields stale starttime),
+    -- or on Windows the --listen address is restored async.
+    retry(nil, 5000, function()
+      sess = n.connect(addr)
+      local _, t = sess:request('nvim_eval', 'v:starttime')
+      ok(t > starttime, ('v:starttime (%d) > old starttime (%d)'):format(t, starttime), t)
+      new_starttime = t
+    end)
+    return new_starttime, sess
+  end
+
   it('validation', function()
-    eq('Vim(restart):E481: No range allowed: :1restart', t.pcall_err(n.command, ':1restart'))
+    eq('Vim(restart):E481: No range allowed: :1restart!', t.pcall_err(n.command, ':1restart!'))
+  end)
+
+  it(':restart (no bang) restores session, window layout', function()
+    local file = 'Xtest-restart-file'
+    write_file(file, 'foobar')
+    finally(function()
+      os.remove(file)
+    end)
+
+    local server_pipe = new_pipename()
+    local server_session
+    finally(function()
+      if server_session then
+        server_session:close()
+      end
+    end)
+    local screen = tt.setup_child_nvim({
+      '--clean',
+      '--listen',
+      server_pipe,
+      '--cmd',
+      'set notermguicolors laststatus=0 noruler noshowcmd',
+    }, {
+      env = vim.tbl_extend('force', env_notermguicolors, {
+        -- Ignore logs, because assert_restarted may log "connection refused" while it retries.
+        NVIM_LOG_FILE = testlog,
+      }),
+    })
+    finally(function()
+      os.remove(testlog)
+    end)
+
+    feed_data(':edit ' .. file .. '\r')
+    feed_data(':wincmd v\r')
+    screen:expect([[
+      ^foobar                   │foobar                  |
+      ~                        │~                       |
+      ~                        │~                       |
+      ~                        │~                       |
+      ~                        │~                       |
+      :wincmd v                                         |
+      {5:-- TERMINAL --}                                    |
+    ]])
+    server_session = n.connect(server_pipe)
+    local _, starttime = server_session:request('nvim_eval', 'v:starttime')
+    eq({ true, '' }, { server_session:request('nvim_get_vvar', 'this_session') })
+
+    -- :restart
+    feed_data(':restart\r')
+    screen:expect([[
+      ^foobar                   │foobar                  |
+      ~                        │~                       |
+      ~                        │~                       |
+      ~                        │~                       |
+      ~                        │~                       |
+                                                        |
+      {5:-- TERMINAL --}                                    |
+    ]])
+    starttime, server_session = assert_restarted(starttime, server_session, server_pipe)
+    eq({ true, 'restart' }, { server_session:request('nvim_get_vvar', 'startreason') })
+    eq({ true, '' }, { server_session:request('nvim_get_vvar', 'this_session') })
+
+    -- :restart!
+    feed_data(':restart!\r')
+    screen:expect([[
+      ^                                                  |
+      ~                                                 |*4
+                                                        |
+      {5:-- TERMINAL --}                                    |
+    ]])
+    starttime, server_session = assert_restarted(starttime, server_session, server_pipe)
+    eq({ true, 'restart!' }, { server_session:request('nvim_get_vvar', 'startreason') })
+
+    feed_data(':qall!\r')
+    screen:expect({ any = vim.pesc('[Process exited 0]') })
+  end)
+
+  it('ZR', function()
+    -- Just exercise ZR, don't need to test all :restart functionality here.
+    local file = 'Xtest-restart-file'
+    write_file(file, 'foo')
+    finally(function()
+      os.remove(file)
+    end)
+    local server_pipe = new_pipename()
+    local server_session
+    finally(function()
+      if server_session then
+        server_session:close()
+      end
+    end)
+    local screen = tt.setup_child_nvim({
+      '--clean',
+      '--listen',
+      server_pipe,
+      '--cmd',
+      'set notermguicolors',
+    }, {
+      env = vim.tbl_extend('force', env_notermguicolors, {
+        -- Ignore logs, because assert_restarted may log "connection refused" while it retries.
+        NVIM_LOG_FILE = testlog,
+      }),
+    })
+    finally(function()
+      os.remove(testlog)
+    end)
+    feed_data(':edit ' .. file .. '\r')
+    screen:expect({ any = 'foo' })
+
+    server_session = n.connect(server_pipe)
+    local _, starttime = server_session:request('nvim_eval', 'v:starttime')
+
+    -- ZR preserves screen state
+    tt.feed_data('ZR')
+    starttime, server_session = assert_restarted(starttime, server_session, server_pipe)
+    screen:expect({ any = 'foo' })
+
+    -- [1-8]ZR does not preserve screen state
+    tt.feed_data('1ZR')
+    screen:expect({ any = vim.pesc('[No Name]'), none = 'foo' })
+
+    -- ZR on modified buffer fails with E37.
+    tt.feed_data('ifoo\027')
+    tt.feed_data('ZR')
+    screen:expect({ any = 'E37:' })
+    tt.feed_data('1ZR')
+    screen:expect({ any = 'E37:' })
+
+    -- [9]ZR discards unsaved changes.
+    tt.feed_data('9ZR')
+    screen:expect({ any = vim.pesc('[No Name]') })
+    starttime, server_session = assert_restarted(starttime, server_session, server_pipe)
+
+    -- The server is now detached and needs to be quit explicitly.
+    tt.feed_data(':qall!\r')
   end)
 
   it('works', function()
+    -- Log exit events + v:exitreason.
+    local eventlog = t.tmpname()
+    local initfile = t.tmpname() .. '.lua'
+    local init = [[
+      local f = %q
+      vim.api.nvim_create_autocmd({ 'QuitPre', 'ExitPre', 'VimLeavePre', 'VimLeave' }, {
+        callback = function(ev)
+          vim.fn.writefile({ ('%%s:%%s'):format(ev.event, vim.v.exitreason) }, f, 'a')
+        end,
+      })
+    ]]
+    write_file(initfile, init:format(eventlog))
+    finally(function()
+      os.remove(eventlog)
+      os.remove(initfile)
+    end)
+
+    local function assert_exitreason(expected)
+      local default =
+        'QuitPre:restart!\nExitPre:restart!\nVimLeavePre:restart!\nVimLeave:restart!\n'
+      eq(expected or default, t.read_file(eventlog))
+      os.remove(eventlog)
+    end
+
     local server_pipe = new_pipename()
     local screen = tt.setup_child_nvim({
+      '--clean',
       '-u',
-      'NONE',
-      '-i',
-      'NONE',
+      initfile,
       '--listen',
       server_pipe,
       '--cmd',
       'colorscheme vim',
       '--cmd',
       'set laststatus=2 background=dark noruler noshowcmd',
-      -- XXX: New server starts before the UI connects to it.
-      -- So checking screen state for this pid is not possible.
-      -- '--cmd',
-      -- 'echo getpid()',
     }, { env = { COLORTERM = 'truecolor' } })
     screen:set_option('rgb', true)
+    screen:add_extra_attr_ids({
+      [101] = { bold = true, foreground = Screen.colors.WebGreen },
+    })
 
-    -- 'termguicolors' support should be detected properly after :restart.
-    -- The value of has("gui_running") should be 0 before and after :restart.
+    -- 'termguicolors' support should be detected properly after :restart!
+    -- The value of has("gui_running") should be 0 before and after :restart!
     local function assert_termguicolors_and_no_gui_running()
       tt.feed_data(':echo "&termguicolors: " .. &termguicolors\013')
       screen:expect({ any = '&termguicolors: 1' })
@@ -254,22 +463,19 @@ describe('TUI :restart', function()
     local server_session = n.connect(server_pipe)
     local _, server_pid = server_session:request('nvim_call_function', 'getpid', {})
     local function assert_new_pid()
-      if is_os('win') then
-        return -- FIXME
-      end
       server_session:close()
-      server_session = n.connect(server_pipe)
+      -- On Windows, --listen address is restored async (after old server exits).
+      if is_os('win') then
+        retry(nil, 5000, function()
+          server_session = n.connect(server_pipe)
+        end)
+      else
+        server_session = n.connect(server_pipe)
+      end
       local _, new_pid = server_session:request('nvim_call_function', 'getpid', {})
       t.neq(server_pid, new_pid)
       server_pid = new_pid
     end
-
-    --- XXX: No longer using -c <command> during new server startup.
-    --- Gets the last `argn` items in v:argv as a joined string.
-    -- local function get_argv(argn)
-    --   local argv = ({ server_session:request('nvim_eval', 'v:argv') })[2] --[[@type table]]
-    --   return table.concat(argv, ' ', #argv - argn, #argv)
-    -- end
 
     local s1 = [[
                                                         |
@@ -281,14 +487,22 @@ describe('TUI :restart', function()
     ]]
 
     tt.feed_data(':set nomodified\013')
+    tt.feed_data(':restart\013')
+    screen:expect(s0)
+    assert_new_pid()
+    assert_exitreason('QuitPre:restart\nExitPre:restart\nVimLeavePre:restart\nVimLeave:restart\n')
+    assert_termguicolors_and_no_gui_running()
+
+    tt.feed_data(':set nomodified\013')
     -- Command is run on new server.
-    tt.feed_data(":restart put ='Hello1'\013")
+    tt.feed_data(":restart! put ='Hello1'\013")
     screen:expect(s1)
     assert_new_pid()
+    assert_exitreason()
     assert_termguicolors_and_no_gui_running()
 
     -- Complex command following +cmd.
-    tt.feed_data(":restart +qall! put ='Hello2' | put ='World2'\013")
+    tt.feed_data(":restart! +qall! put ='Hello2' | put ='World2'\013")
     screen:expect([[
                                                         |
       Hello2                                            |
@@ -299,80 +513,103 @@ describe('TUI :restart', function()
       {5:-- TERMINAL --}                                    |
     ]])
     assert_new_pid()
+    assert_exitreason()
     assert_termguicolors_and_no_gui_running()
 
-    -- Check ":restart" on an unmodified buffer.
+    -- Check ":restart!" on an unmodified buffer.
     tt.feed_data(':set nomodified\013')
-    tt.feed_data(':restart\013')
+    tt.feed_data(':restart!\013')
     screen:expect(s0)
     assert_new_pid()
+    assert_exitreason()
     assert_termguicolors_and_no_gui_running()
 
-    -- Check ":restart +qall!" on an unmodified buffer.
-    tt.feed_data(':restart +qall!\013')
+    -- Check ":restart! +qall!" on an unmodified buffer.
+    tt.feed_data(':restart! +qall!\013')
     screen:expect(s0)
     assert_new_pid()
+    assert_exitreason()
     assert_termguicolors_and_no_gui_running()
 
-    -- Check ":restart +echo" cannot restart server.
+    -- Check ":restart[!] +echo" cannot restart server.
     -- Check the full screen state to ensure this doesn't pollute the current UI.
-    tt.feed_data(':restart +echo\013')
-    screen:expect([[
-      ^                                                  |
-      {1:~}{18:                                                 }|*3
-      {3:[No Name]                                         }|
-      {9:restart failed: +cmd did not quit the server}      |
-      {5:-- TERMINAL --}                                    |
-    ]])
+    for _, cmd in ipairs({ ':restart', ':restart!' }) do
+      tt.feed_data(cmd .. ' +echo\013')
+      screen:expect([[
+                                                          |
+        {1:~}{18:                                                 }|
+        {3:                                                  }|
+        {9:E5201: Restart failed: +cmd did not quit server: e}|
+        {9:cho}                                               |
+        {101:Press ENTER or type command to continue}^           |
+        {5:-- TERMINAL --}                                    |
+      ]])
+      tt.feed_data('\013')
+    end
 
     tt.feed_data('ithis will be removed\027')
     screen:expect({ any = vim.pesc('this will be remove^d') })
 
-    -- Check ":confirm restart" on a modified buffer.
-    tt.feed_data(':confirm restart\013')
+    -- Check ":confirm restart!" on a modified buffer.
+    tt.feed_data(':confirm restart!\013')
     screen:expect({ any = vim.pesc('Save changes to "Untitled"?') })
 
     -- Cancel the operation (abandons restart).
     tt.feed_data('C\013')
     screen:expect({ any = vim.pesc('[No Name]') })
+    -- Failed/cancelled restarts still fire QuitPre/ExitPre (but not VimLeave[Pre]).
+    assert_exitreason('QuitPre:restart!\nExitPre:restart!\n')
 
-    -- Check :restart respects 'confirm' option.
+    -- Check :restart! respects 'confirm' option.
     tt.feed_data(':set confirm\013')
-    tt.feed_data(':restart\013')
+    tt.feed_data(':restart!\013')
     screen:expect({ any = vim.pesc('Save changes to "Untitled"?') })
     tt.feed_data('C\013')
     screen:expect({ any = vim.pesc('[No Name]') })
     tt.feed_data(':set noconfirm\013')
+    -- Failed/cancelled restarts still fire QuitPre/ExitPre (but not VimLeave[Pre]).
+    assert_exitreason('QuitPre:restart!\nExitPre:restart!\n')
 
-    -- Check ":confirm restart <cmd>" on a modified buffer.
-    tt.feed_data(":confirm restart put ='Hello3'\013")
+    -- Check ":confirm restart! <cmd>" on a modified buffer.
+    tt.feed_data(":confirm restart! put ='Hello3'\013")
     screen:expect({ any = vim.pesc('Save changes to "Untitled"?') })
     tt.feed_data('N\013')
     screen:expect({ any = '%^Hello3' })
     assert_new_pid()
+    assert_exitreason()
     assert_termguicolors_and_no_gui_running()
 
-    -- Check ":confirm restart +echo" correctly ignores ":confirm"
-    tt.feed_data(':confirm restart +echo\013')
-    screen:expect({ any = vim.pesc('+cmd did not quit the server') })
+    -- Check ":confirm restart! +echo" correctly ignores ":confirm"
+    tt.feed_data(':confirm restart! +echo\013')
+    screen:expect({ any = vim.pesc('E5201: Restart failed: +cmd did not quit server') })
 
-    -- Check ":restart" on a modified buffer.
+    -- Check ":restart[!]" on a modified buffer.
     tt.feed_data('ithis will be removed\027')
-    tt.feed_data(':restart\013')
-    screen:expect({ any = vim.pesc('Vim(qall):E37: No write since last change') })
+    for cmd, exitreason in pairs({
+      [':restart'] = 'restart',
+      [':restart!'] = 'restart!',
+    }) do
+      tt.feed_data(cmd .. '\013')
+      screen:expect({ any = vim.pesc('Vim(qall):E37: No write since last change') })
+      assert_exitreason(('QuitPre:%s\nExitPre:%s\n'):format(exitreason, exitreason))
+    end
 
-    -- Check ":restart +qall!" on a modified buffer.
+    -- Check ":restart! +qall!" on a modified buffer.
     tt.feed_data('ithis will be removed\027')
-    tt.feed_data(':restart +qall!\013')
+    tt.feed_data(':restart! +qall!\013')
     screen:expect(s0)
     assert_new_pid()
+    assert_exitreason()
     assert_termguicolors_and_no_gui_running()
 
-    -- No --listen conflict when server exit is delayed.
-    feed_data(':lua vim.schedule(function() vim.wait(100) end); vim.cmd.restart()\n')
-    screen:expect(s0)
-    assert_new_pid()
-    assert_termguicolors_and_no_gui_running()
+    if not is_os('win') then
+      -- No --listen conflict when server exit is delayed.
+      feed_data(':lua vim.schedule(function() vim.wait(100) end); vim.cmd("restart!")\n')
+      screen:expect(s0)
+      assert_new_pid()
+      assert_exitreason()
+      assert_termguicolors_and_no_gui_running()
+    end
 
     screen:try_resize(60, 6)
     screen:expect([[
@@ -383,8 +620,8 @@ describe('TUI :restart', function()
       {5:-- TERMINAL --}                                              |
     ]])
 
-    --- Check that ":restart" uses the updated size after terminal resize.
-    tt.feed_data(':restart echo "restarted"\013')
+    --- Check that ":restart!" uses the updated size after terminal resize.
+    tt.feed_data(':restart! echo "restarted"\013')
     screen:expect([[
       ^                                                            |
       {1:~}{18:                                                           }|*2
@@ -393,6 +630,7 @@ describe('TUI :restart', function()
       {5:-- TERMINAL --}                                              |
     ]])
     assert_new_pid()
+    assert_exitreason()
     assert_termguicolors_and_no_gui_running()
 
     -- The server is now detached and needs to be quit explicitly.
@@ -402,6 +640,11 @@ describe('TUI :restart', function()
 
   it('drops "-" and "-- [files…]" from v:argv #34417', function()
     t.skip(is_os('win'), 'stdin behavior differs on Windows')
+    local file = 'file.lua'
+    write_file(file, "print('-S works')\n")
+    finally(function()
+      os.remove(file)
+    end)
     local server_session
     finally(function()
       if server_session then
@@ -418,6 +661,8 @@ describe('TUI :restart', function()
       server_pipe,
       '--cmd',
       'set notermguicolors',
+      '-S',
+      file,
       '-s',
       '-',
       '-',
@@ -429,16 +674,18 @@ describe('TUI :restart', function()
       ^                                                  |
       ~                                                 |*3
       {2:Xtest-file1                     0,0-1          All}|
-                                                        |
+      -S works                                          |
       {5:-- TERMINAL --}                                    |
     ]])
     server_session = n.connect(server_pipe)
     local expr = 'index(v:argv, "-") >= 0 || index(v:argv, "--") >= 0 ? v:true : v:false'
     local has_s = 'index(v:argv, "-s") >= 0 ? v:true : v:false'
+    local has_S = 'index(v:argv, "-S") >= 0 ? v:true : v:false'
     eq({ true, true }, { server_session:request('nvim_eval', expr) })
     eq({ true, true }, { server_session:request('nvim_eval', has_s) })
+    eq({ true, true }, { server_session:request('nvim_eval', has_S) })
 
-    tt.feed_data(":restart put='foo'\013")
+    tt.feed_data(":restart! put='foo'\013")
     screen:expect([[
                                                         |
       ^foo                                               |
@@ -452,6 +699,7 @@ describe('TUI :restart', function()
 
     eq({ true, false }, { server_session:request('nvim_eval', expr) })
     eq({ true, false }, { server_session:request('nvim_eval', has_s) })
+    eq({ true, false }, { server_session:request('nvim_eval', has_S) })
 
     -- local argv = ({ server_session:request('nvim_eval', 'v:argv') })[2] --[[@type table]]
     -- eq(13, #argv)
@@ -478,7 +726,7 @@ describe('TUI :restart', function()
     ]])
 
     -- 'laststatus' should be 0 in the new Nvim and FileType event should be triggered.
-    feed_data(':restart set nowrap | edit test/functional/fixtures/bigfile.txt\r')
+    feed_data(':restart! set nowrap | edit test/functional/fixtures/bigfile.txt\r')
     screen:expect([[
       ^0000;<control>;Cc;0;BN;;;;;N;NULL;;;;             |
       0001;<control>;Cc;0;BN;;;;;N;START OF HEADING;;;; |
@@ -541,7 +789,7 @@ describe('TUI :restart', function()
       {5:-- TERMINAL --}                                    |
     ]])
 
-    feed_data(':restart echo "restarted"\r')
+    feed_data(':restart! echo "restarted"\r')
     screen:expect([[
       ^                     │0000;<control>;Cc;0;BN;;;;;N|
       ~                    │0001;<control>;Cc;0;BN;;;;;N|
@@ -552,7 +800,7 @@ describe('TUI :restart', function()
       {5:-- TERMINAL --}                                    |
     ]])
 
-    feed_data(':set sessionoptions-=winsize | restart\r')
+    feed_data(':set sessionoptions-=winsize | restart!\r')
     screen:expect([[
       ^                         │0000;<control>;Cc;0;BN;;|
       ~                        │0001;<control>;Cc;0;BN;;|
@@ -1767,11 +2015,8 @@ describe('TUI', function()
   end)
 
   it('paste: terminal mode', function()
-    if is_ci('github') then
-      pending('tty-test complains about not owning the terminal -- actions/runner#241')
-    end
     child_exec_lua('vim.o.statusline="^^^^^^^"')
-    child_exec_lua('vim.cmd.terminal(...)', testprg('tty-test'))
+    child_exec_lua('vim.fn.jobstart({ ... }, { term = true })', testprg('tty-test'))
     feed_data('i')
     screen:expect([[
       tty ready                                         |
@@ -2277,9 +2522,7 @@ describe('TUI', function()
   end)
 
   it('forwards :term palette colors with termguicolors', function()
-    if is_ci('github') then
-      pending('tty-test complains about not owning the terminal -- actions/runner#241')
-    end
+    t.skip(is_os('win'), 'FIXME: wrong behavior on Windows')
     screen:set_rgb_cterm(true)
     screen:set_default_attr_ids({
       [1] = { { reverse = true }, { reverse = true } },
@@ -2313,7 +2556,7 @@ describe('TUI', function()
 
     child_exec_lua('vim.o.statusline="^^^^^^^"')
     child_exec_lua('vim.o.termguicolors=true')
-    child_exec_lua('vim.cmd.terminal(...)', testprg('tty-test'))
+    child_exec_lua('vim.fn.jobstart({ ... }, { term = true })', testprg('tty-test'))
     screen:expect([[
       ^tty ready                                         |
                                                         |*3
@@ -2562,6 +2805,7 @@ describe('TUI', function()
       vim.o.ruler = false
       vim.o.showcmd = false
       vim.o.termsync = false
+      vim.o.titlestring = '%t%( %M%) - Nvim'
       vim.o.title = true
     ]])
     retry(nil, nil, function()
@@ -2771,7 +3015,7 @@ describe('TUI', function()
       local buf = vim.api.nvim_get_current_buf()
       _G.urls = {}
       vim.api.nvim_create_autocmd('TermRequest', {
-        buffer = buf,
+        buf = buf,
         callback = function(ev)
           local req = ev.data.sequence
           if not req then
@@ -2820,7 +3064,7 @@ describe('TUI', function()
         end,
       })
       vim.api.nvim_create_autocmd('InsertEnter', {
-        buffer = 0,
+        buf = 0,
         callback = function()
           _G.result = vim.wait(3000, function()
             local expected = '\027P1+r5463'
@@ -2913,8 +3157,8 @@ describe('TUI', function()
       { 'tty', 'tty' },
       child_exec_lua('return { vim.uv.guess_handle(0), vim.uv.guess_handle(1) }')
     )
-    -- Also works after :restart #38745
-    feed_data(':restart lua ={ vim.uv.guess_handle(0), vim.uv.guess_handle(1) }\r')
+    -- Also works after :restart! #38745
+    feed_data(':restart! lua ={ vim.uv.guess_handle(0), vim.uv.guess_handle(1) }\r')
     screen:expect([[
       ^                                                  |
       {100:~                                                 }|*3
@@ -3212,6 +3456,42 @@ describe('TUI', function()
     -- Wait for the statusline to redraw to confirm that the TUI lives and ASAN is happy.
     feed_data(':set columns=99|set stl=redrawn%m\n')
     screen:expect({ any = 'redrawn%[%+%]' })
+  end)
+
+  it('missing DSR response does not lead to hit-enter prompt #38877', function()
+    local child_server = n.new_pipename()
+    exec_lua('vim.uv.os_unsetenv("NVIM_TEST")')
+    local job = fn.jobstart({ nvim_prog, '--clean', '--listen', child_server }, {
+      -- Use pty = true for a PTY without a terminal, so that there is no DSR response.
+      pty = true,
+      env = {
+        VIMRUNTIME = os.getenv('VIMRUNTIME'),
+        COLORTERM = 'xterm-256color',
+        NVIM_LOG_FILE = testlog,
+      },
+    })
+    finally(function()
+      exec_lua(function()
+        vim.fn.jobstop(job)
+        vim.fn.jobwait({ job }, 5000)
+      end)
+      os.remove(testlog)
+    end)
+    retry(nil, nil, function()
+      t.neq(nil, vim.uv.fs_stat(child_server))
+    end)
+    local child_session = n.connect(child_server)
+    local expected_msg =
+      "E1568: Terminal did not respond to DSR request for 'background' color. Startup may be slower. :help 'ttyfast'"
+    retry(nil, 4000, function()
+      eq({ true, { mode = 'n', blocking = false } }, { child_session:request('nvim_get_mode') })
+      if not is_os('win') then -- ConPTY provides DSR response on Windows?
+        eq(
+          { true, { output = expected_msg } },
+          { child_session:request('nvim_exec2', 'messages', { output = true }) }
+        )
+      end
+    end)
   end)
 end)
 
@@ -4158,23 +4438,28 @@ describe('TUI bg color', function()
     end)
   end)
 
-  it('triggers OptionSet from automatic background processing', function()
+  it('does not trigger OptionSet from automatic background processing', function()
+    command('set background=light')
+    local child_server = new_pipename()
     local screen = tt.setup_child_nvim({
       '--clean',
+      '--listen',
+      child_server,
       '--cmd',
       'colorscheme vim',
       '--cmd',
       'set noswapfile',
       '-c',
-      'autocmd OptionSet background echo "did OptionSet, yay!"',
+      [[let g:background_optionset = 0]],
+      '-c',
+      [[autocmd OptionSet background let g:background_optionset += 1]],
     })
-    screen:expect([[
-      ^                                                  |
-      {5:~}                                                 |*3
-      {3:[No Name]                       0,0-1          All}|
-      did OptionSet, yay!                               |
-      {5:-- TERMINAL --}                                    |
-    ]])
+    screen:expect({ any = '%[No Name%]' })
+    local child_session = n.connect(child_server)
+    retry(nil, nil, function()
+      eq({ true, 'light' }, { child_session:request('nvim_eval', '&background') })
+    end)
+    eq({ true, 0 }, { child_session:request('nvim_eval', 'g:background_optionset') })
   end)
 
   it('sends theme update notifications when background changes #31652', function()
@@ -4279,11 +4564,11 @@ describe('TUI client', function()
     screen_server:expect(s1)
   end)
 
-  it(':restart works when connecting to remote instance (with its own TUI)', function()
+  it(':restart! works when connecting to remote instance (with its own TUI)', function()
     local _, screen_server, screen_client = start_tui_and_remote_client()
 
     -- Both clients should attach to the new server.
-    feed_data(':restart +qall!\n')
+    feed_data(':restart! +qall!\n')
     local screen_restarted = [[
       ^                                                  |
       {100:~                                                 }|*3
@@ -4298,7 +4583,7 @@ describe('TUI client', function()
     screen_client:expect({ any = 'GUI Running: 0' })
 
     -- The :vsplit command should only be executed once.
-    feed_data(':restart vsplit\r')
+    feed_data(':restart! vsplit\r')
     screen_restarted = [[
       ^                         │                        |
       {100:~                        }│{100:~                       }|*3
@@ -4390,11 +4675,11 @@ describe('TUI client', function()
     screen_client:expect({ any = 'GUI Running: 0' })
   end)
 
-  it(':restart works when connecting to remote instance (--headless)', function()
+  it(':restart! works when connecting to remote instance (--headless)', function()
     local _, server_pipe, screen_client = start_headless_server_and_client(false)
 
     -- The client should attach to the new server and the original server should exit.
-    feed_data(':restart +qall!\n')
+    feed_data(':restart! +qall!\n')
     screen_client:expect([[
       ^                                                  |
       {100:~                                                 }|*4
@@ -4428,6 +4713,7 @@ describe('TUI client', function()
       pending('N/A: missing LuaJIT FFI')
     end
 
+    server:request('nvim_set_option_value', 'titlestring', '%t%( %M%) - Nvim', {})
     local bufname = api.nvim_buf_get_name(0)
     local old_title = api.nvim_buf_get_var(0, 'term_title')
     if not is_os('win') then

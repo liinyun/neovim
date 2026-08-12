@@ -632,7 +632,7 @@ M.cmds = {
   },
   {
     command = 'connect',
-    flags = bit.bor(BANG, WORD1, NOTRLCOM, NEEDARG),
+    flags = bit.bor(BANG, FILE1, NOTRLCOM, NEEDARG),
     addr_type = 'ADDR_NONE',
     func = 'ex_connect',
   },
@@ -2260,7 +2260,7 @@ M.cmds = {
   },
   {
     command = 'restart',
-    flags = bit.bor(CMDARG, EXTRA, NOTRLCOM),
+    flags = bit.bor(BANG, CMDARG, EXTRA, NOTRLCOM),
     addr_type = 'ADDR_NONE',
     func = 'ex_restart',
   },

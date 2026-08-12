@@ -26,12 +26,12 @@ local FoldInfo = {}
 FoldInfo.__index = FoldInfo
 
 ---@private
----@param bufnr integer
-function FoldInfo.new(bufnr)
+---@param buf integer
+function FoldInfo.new(buf)
   return setmetatable({
     levels0 = {},
     levels = {},
-    parser = ts.get_parser(bufnr, nil),
+    parser = ts.get_parser(buf, nil),
   }, FoldInfo)
 end
 
@@ -222,13 +222,13 @@ function FoldInfo:foldupdate(bufnr, srow, erow)
     -- foldUpdate() is guarded in insert mode. So update folds on InsertLeave
     if #(api.nvim_get_autocmds({
       group = group,
-      buffer = bufnr,
+      buf = bufnr,
     })) > 0 then
       return
     end
     api.nvim_create_autocmd('InsertLeave', {
       group = group,
-      buffer = bufnr,
+      buf = bufnr,
       once = true,
       callback = function()
         self:do_foldupdate(bufnr)
@@ -295,9 +295,10 @@ local function on_changedtree(bufnr, tree_changes)
       local srow, _, erow, ecol = Range.unpack4(change)
       -- If a parser doesn't have any ranges explicitly set, treesitter will
       -- return a range with end_row and end_bytes with a value of UINT32_MAX,
-      -- so clip end_row to the max buffer line.
+      -- which is represented as -1 on 32-bit platforms, so clip end_row to
+      -- the max buffer line.
       -- TODO(lewis6991): Handle this generally
-      if erow > max_erow then
+      if erow > max_erow or erow < 0 then
         erow = max_erow
       elseif ecol > 0 then
         erow = erow + 1
@@ -392,7 +393,7 @@ function M.foldexpr(lnum)
   if not foldinfos[bufnr] then
     foldinfos[bufnr] = FoldInfo.new(bufnr)
     api.nvim_create_autocmd({ 'BufUnload', 'VimEnter', 'FileType' }, {
-      buffer = bufnr,
+      buf = bufnr,
       once = true,
       callback = function()
         foldinfos[bufnr] = nil

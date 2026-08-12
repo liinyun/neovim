@@ -486,18 +486,37 @@ static void draw_foldcolumn(win_T *wp, winlinevars_T *wlv)
   int fdc = compute_foldcolumn(wp, 0);
   if (fdc > 0) {
     int attr = win_hl_attr(wp, use_cursor_line_highlight(wp, wlv->lnum) ? HLF_CLF : HLF_FC);
-    fill_foldcolumn(wp, wlv->foldinfo, wlv->lnum, attr, fdc, &wlv->off, NULL, NULL);
+    bool is_virt = wlv->filler_todo > 0;
+    fill_foldcolumn(wp, wlv->foldinfo, wlv->lnum, attr, fdc, is_virt, &wlv->off, NULL, NULL);
+  }
+}
+
+/// Get foldcolumn char based on line fold level and column, either `foldsep`, `foldinner`,
+/// or an overflow indicator. `foldopen` and `foldclosed` are set in `fill_foldcolumn`.
+/// @param first_level Lowest fold level displayed on line
+/// @param i Column index
+static inline schar_T foldcolumn_sep_char(int first_level, int i, win_T *wp)
+{
+  if (first_level == 1) {
+    return wp->w_p_fcs_chars.foldsep;
+  } else if (wp->w_p_fcs_chars.foldinner != NUL) {
+    return wp->w_p_fcs_chars.foldinner;
+  } else if (first_level + i <= 9) {
+    return schar_from_ascii('0' + first_level + i);
+  } else {
+    return schar_from_ascii('>');
   }
 }
 
 /// Draw the foldcolumn or fill "out_buffer". Assume monocell characters.
 ///
 /// @param fdc  Current width of the foldcolumn
+/// @param is_virt Whether the line is a filler line (diff or virtual)
 /// @param[out] wlv_off  Pointer to linebuf offset, incremented for default column
 /// @param[out] out_buffer  Char array to fill, only used for 'statuscolumn'
 /// @param[out] out_vcol  vcol array to fill, only used for 'statuscolumn'
-void fill_foldcolumn(win_T *wp, foldinfo_T foldinfo, linenr_T lnum, int attr, int fdc, int *wlv_off,
-                     colnr_T *out_vcol, schar_T *out_buffer)
+void fill_foldcolumn(win_T *wp, foldinfo_T foldinfo, linenr_T lnum, int attr, int fdc, bool is_virt,
+                     int *wlv_off, colnr_T *out_vcol, schar_T *out_buffer)
 {
   bool closed = foldinfo.fi_level != 0 && foldinfo.fi_lines > 0;
   int level = foldinfo.fi_level;
@@ -515,14 +534,20 @@ void fill_foldcolumn(win_T *wp, foldinfo_T foldinfo, linenr_T lnum, int attr, in
       symbol = wp->w_p_fcs_chars.foldclosed;
     } else if (foldinfo.fi_lnum == lnum && first_level + i >= foldinfo.fi_low_level) {
       symbol = wp->w_p_fcs_chars.foldopen;
-    } else if (first_level == 1) {
-      symbol = wp->w_p_fcs_chars.foldsep;
-    } else if (wp->w_p_fcs_chars.foldinner != NUL) {
-      symbol = wp->w_p_fcs_chars.foldinner;
-    } else if (first_level + i <= 9) {
-      symbol = schar_from_ascii('0' + first_level + i);
     } else {
-      symbol = schar_from_ascii('>');
+      symbol = foldcolumn_sep_char(first_level, i, wp);
+    }
+
+    // We don't want to show `foldopen` or `foldclose` twice, so we compute
+    // the fold level of `lnum - 1` and reuse the logic from above.
+    if (is_virt && foldinfo.fi_level != 0 && foldinfo.fi_lnum == lnum) {
+      int outer_level = MAX(foldinfo.fi_low_level - 1, 0);
+      int outer_first_level = MAX(outer_level - fdc + 1, 1);
+      if (i >= outer_level) {
+        symbol = schar_from_ascii(' ');
+      } else {
+        symbol = foldcolumn_sep_char(outer_first_level, i, wp);
+      }
     }
 
     int vcol = i >= level ? -1 : (i == closedcol - 1 && closed) ? -2 : -3;
@@ -751,15 +776,27 @@ static void draw_statuscol(win_T *wp, winlinevars_T *wlv, int virtnum, int col_r
   draw_col_fill(wlv, schar_from_ascii(' '), stcp->width - width, cur_attr);
 }
 
-static void handle_breakindent(win_T *wp, winlinevars_T *wlv)
+/// Whether "attr" draws an underline, undercurl, strikethrough, or overline: a line tied to text
+/// glyphs that looks broken drawn over blank filler cells, unlike a plain background/reverse-video
+/// highlight.
+static bool attr_has_line_deco(int attr)
+{
+  HlAttrs ae = syn_attr2entry(attr);
+  int32_t const mask = HL_UNDERLINE_MASK | HL_STRIKETHROUGH | HL_OVERLINE;
+  return (ae.rgb_ae_attr & mask) != 0 || (ae.cterm_ae_attr & mask) != 0;
+}
+
+static void handle_breakindent(win_T *wp, winlinevars_T *wlv, int gap_decor_attr)
 {
   // draw 'breakindent': indent wrapped text accordingly
   // if wlv->need_showbreak is set, breakindent also applies
   if (wp->w_p_bri && (wlv->row > wlv->startrow + wlv->filler_lines
                       || wlv->need_showbreak)) {
-    int attr = 0;
+    // Extend the still-active decoration/syntax highlight (e.g. a full-width code-block background)
+    // into the indent; it is not ending here, just skipping over screen cells with no buffer text.
+    int attr = gap_decor_attr;
     if (wlv->diff_hlf != (hlf_T)0) {
-      attr = win_hl_attr(wp, (int)wlv->diff_hlf);
+      attr = hl_combine_attr(attr, win_hl_attr(wp, (int)wlv->diff_hlf));
     }
     int num = get_breakindent_win(wp, ml_get_buf(wp->w_buffer, wlv->lnum));
     if (wlv->row == wlv->startrow) {
@@ -801,7 +838,7 @@ static void handle_breakindent(win_T *wp, winlinevars_T *wlv)
   }
 }
 
-static void handle_showbreak_and_filler(win_T *wp, winlinevars_T *wlv)
+static void handle_showbreak_and_filler(win_T *wp, winlinevars_T *wlv, int gap_decor_attr)
 {
   int remaining = wp->w_view_width - wlv->off;
   if (wlv->filler_todo > wlv->filler_lines - wlv->n_virt_lines) {
@@ -817,8 +854,10 @@ static void handle_showbreak_and_filler(win_T *wp, winlinevars_T *wlv)
   char *const sbr = get_showbreak_value(wp);
   if (*sbr != NUL && wlv->need_showbreak) {
     // Draw 'showbreak' at the start of each broken line.
-    // Combine 'showbreak' with 'cursorline', prioritizing 'showbreak'.
-    int attr = hl_combine_attr(wlv->cul_attr, win_hl_attr(wp, HLF_AT));
+    // Combine 'showbreak' with 'cursorline' and the still-active decoration/syntax highlight,
+    // prioritizing 'showbreak'.
+    int attr = hl_combine_attr(wlv->cul_attr, gap_decor_attr);
+    attr = hl_combine_attr(attr, win_hl_attr(wp, HLF_AT));
     colnr_T vcol_before = wlv->vcol;
     draw_col_buf(wp, wlv, sbr, strlen(sbr), attr, NULL, true);
     wlv->vcol_sbr = wlv->vcol;
@@ -1083,6 +1122,7 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, b
   int search_attr = 0;                  // attributes desired by 'hlsearch' or ComplMatchIns
   int vcol_save_attr = 0;               // saved attr for 'cursorcolumn'
   int decor_attr = 0;                   // attributes desired by syntax and extmarks
+  int decor_attr_save = 0;              // decor_attr saved for gap_decor_attr
   bool has_syntax = false;              // this buffer has syntax highl.
   int folded_attr = 0;                  // attributes for folded line
   int eol_hl_off = 0;                   // 1 if highlighted char after EOL
@@ -1346,6 +1386,7 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, b
     // Draw the 'statuscolumn' if option is set.
     statuscol.draw = true;
     statuscol.sattrs = wlv.sattrs;
+    statuscol.lnum = lnum;
     statuscol.foldinfo = foldinfo;
     statuscol.width = win_col_off(wp) - (wp == cmdwin_win);
     statuscol.sign_cul_id = use_cursor_line_highlight(wp, lnum) ? wlv.sign_cul_attr : 0;
@@ -1771,13 +1812,15 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, b
         }
       }
 
-      // Check if 'breakindent' applies and show it.
+      // Check if 'breakindent' applies and show it. Like the 'linebreak' filler, attrs must not
+      // extend into this gap either (see attr_has_line_deco()).
+      int const gap_decor_attr = attr_has_line_deco(decor_attr_save) ? 0 : decor_attr_save;
       if (!wp->w_briopt_sbr) {
-        handle_breakindent(wp, &wlv);
+        handle_breakindent(wp, &wlv, gap_decor_attr);
       }
-      handle_showbreak_and_filler(wp, &wlv);
+      handle_showbreak_and_filler(wp, &wlv, gap_decor_attr);
       if (wp->w_briopt_sbr) {
-        handle_breakindent(wp, &wlv);
+        handle_breakindent(wp, &wlv, gap_decor_attr);
       }
 
       wlv.col = wlv.off;
@@ -2312,6 +2355,8 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, b
                                           wlv.char_attr);
         }
 
+        decor_attr_save = decor_attr;  // save current attr
+
         // we don't want linebreak to apply for lines that start with
         // leading spaces, followed by long letters (since it would add
         // a break at the beginning of a line and this might be unexpected)
@@ -2334,11 +2379,19 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, b
           wlv.n_extra = win_charsize(cstype, wlv.vcol, p, utf_ptr2CharInfo(p).value,
                                      &csarg).width - 1;
 
-          if (on_last_col && mb_c != TAB) {
-            // Do not continue search/match highlighting over the
-            // line break, but for TABs the highlighting should
-            // include the complete width of the character
-            search_attr = 0;
+          // Do not bleed attrs into the filler for the pushed-down word (TABs keep their own
+          // full-width highlight; see attr_has_line_deco()). search_attr also resets when its own
+          // span ends exactly here (on_last_col), matching its pre-existing semantics.
+          if (mb_c != TAB) {
+            if (on_last_col || attr_has_line_deco(search_attr)) {
+              search_attr = 0;
+            }
+            if (attr_has_line_deco(decor_attr)) {
+              decor_attr = 0;
+            }
+            if (attr_has_line_deco(area_attr)) {
+              area_attr = 0;
+            }
           }
 
           if (mb_c == TAB && wlv.n_extra + wlv.col > view_width) {
@@ -2570,7 +2623,8 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, b
           wlv.n_attr = 1;
           mb_c = schar_get_first_codepoint(mb_schar);
         } else if (mb_schar != NUL) {
-          wlv.p_extra = transchar_buf(wp->w_buffer, mb_c);
+          xstrlcpy(wlv.extra, transchar_buf(wp->w_buffer, mb_c), sizeof(wlv.extra));
+          wlv.p_extra = wlv.extra;
           if (wlv.n_extra == 0) {
             wlv.n_extra = byte2cells(mb_c) - 1;
           }
@@ -3105,7 +3159,7 @@ int win_line(win_T *wp, linenr_T lnum, int startrow, int endrow, int col_rows, b
 end_check:
     // At end of screen line and there is more to come: Display the line
     // so far.  If there is no more to display it is caught above.
-    if (wlv.col >= view_width && (!has_foldtext || virt_line_index >= 0)
+    if (wlv.col >= view_width && (!has_foldtext || wlv.filler_todo > 0)
         && (wlv.col <= leftcols_width
             || *ptr != NUL
             || wlv.filler_todo > 0

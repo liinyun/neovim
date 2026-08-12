@@ -331,6 +331,9 @@ enum {
   CF_UPPER = 0x02,
 };
 
+// Max allowed length for COMPOUND section
+#define COMPOUND_MAX_LEN        100000
+
 static const char *e_spell_trunc = N_("E758: Truncated spell file");
 static const char e_error_while_reading_sug_file_str[]
   = N_("E782: Error while reading .sug file: %s");
@@ -849,7 +852,7 @@ endOK:
 
 // Fill in the wordcount fields for a trie.
 // Returns the total number of words.
-static void tree_count_words(const uint8_t *byts, idx_T *idxs)
+static void tree_count_words(const uint8_t *byts, int byts_len, idx_T *idxs)
 {
   idx_T arridx[MAXWLEN];
   int curi[MAXWLEN];
@@ -880,8 +883,8 @@ static void tree_count_words(const uint8_t *byts, idx_T *idxs)
         wordcount[depth]++;
 
         // Skip over any other NUL bytes (same word with different
-        // flags).
-        while (byts[n + 1] == 0) {
+        // flags).  But don't go over the end
+        while (n + 1 < byts_len && byts[n + 1] == 0) {
           n++;
           curi[depth]++;
         }
@@ -953,8 +956,8 @@ void suggest_load_files(void)
 
       // <SUGWORDTREE>: <wordtree>
       // Read the trie with the soundfolded words.
-      if (spell_read_tree(fd, &slang->sl_sbyts, NULL, &slang->sl_sidxs,
-                          false, 0) != 0) {
+      if (spell_read_tree(fd, &slang->sl_sbyts, &slang->sl_sbyts_len,
+                          &slang->sl_sidxs, false, 0) != 0) {
 someerror:
         semsg(_(e_error_while_reading_sug_file_str),
               slang->sl_fname);
@@ -999,8 +1002,8 @@ someerror:
 
       // Need to put word counts in the word tries, so that we can find
       // a word by its number.
-      tree_count_words(slang->sl_fbyts, slang->sl_fidxs);
-      tree_count_words(slang->sl_sbyts, slang->sl_sidxs);
+      tree_count_words(slang->sl_fbyts, slang->sl_fbyts_len, slang->sl_fidxs);
+      tree_count_words(slang->sl_sbyts, slang->sl_sbyts_len, slang->sl_sidxs);
 
 nextone:
       if (fd != NULL) {
@@ -1429,24 +1432,28 @@ static int read_compound(FILE *fd, slang_T *slang, int len)
   // "a[bc]/a*b+" -> "^\(a[bc]\|a*b\+\)$".
   // Inserting backslashes may double the length, "^\(\)$<Nul>" is 7 bytes.
   // Conversion to utf-8 may double the size.
-  c = todo * 2 + 7;
-  c += todo * 2;
-  char *pat = xmalloc((size_t)c);
+  if ((size_t)todo > COMPOUND_MAX_LEN) {
+    return SP_FORMERROR;
+  }
+  size_t patsize = (size_t)todo * 2 + 7;
+  patsize += (size_t)todo * 2;
+  size_t flagsize = (size_t)todo + 1;
+  char *pat = xmalloc(patsize);
 
   // We also need a list of all flags that can appear at the start and one
   // for all flags.
-  uint8_t *cp = xmalloc((size_t)todo + 1);
+  uint8_t *cp = xmalloc(flagsize);
   slang->sl_compstartflags = cp;
   *cp = NUL;
 
-  uint8_t *ap = xmalloc((size_t)todo + 1);
+  uint8_t *ap = xmalloc(flagsize);
   slang->sl_compallflags = ap;
   *ap = NUL;
 
   // And a list of all patterns in their original form, for checking whether
   // compounding may work in match_compoundrule().  This is freed when we
   // encounter a wildcard, the check doesn't work then.
-  uint8_t *crp = xmalloc((size_t)todo + 1);
+  uint8_t *crp = xmalloc(flagsize);
   slang->sl_comprules = crp;
 
   char *pp = pat;
@@ -1668,7 +1675,7 @@ static int spell_read_tree(FILE *fd, uint8_t **bytsp, int *bytsp_len, idx_T **id
   if (len < 0) {
     return SP_TRUNCERROR;
   }
-  if ((size_t)len >= SIZE_MAX / sizeof(int)) {
+  if ((size_t)len > SIZE_MAX / sizeof(int)) {
     // Invalid length, multiply with sizeof(int) would overflow.
     return SP_FORMERROR;
   }
@@ -1676,8 +1683,11 @@ static int spell_read_tree(FILE *fd, uint8_t **bytsp, int *bytsp_len, idx_T **id
     return 0;
   }
 
-  // Allocate the byte array.
-  uint8_t *bp = xmalloc((size_t)len);
+  // Allocate the byte array.  Zero-initialize so that any position the
+  // tree does not visit reads as 0; a stray BY_INDEX shared reference
+  // into such a slot then behaves as end-of-word in spellsuggest()
+  // instead of consuming an arbitrary heap byte as a siblingcount.
+  uint8_t *bp = xcalloc(1, (size_t)len);
   *bytsp = bp;
   if (bytsp_len != NULL) {
     *bytsp_len = len;
@@ -1688,9 +1698,12 @@ static int spell_read_tree(FILE *fd, uint8_t **bytsp, int *bytsp_len, idx_T **id
   *idxsp = ip;
 
   // Recursively read the tree and store it in the array.
-  int idx = read_tree_node(fd, bp, ip, len, 0, prefixtree, prefixcnt);
+  int idx = read_tree_node(fd, bp, ip, len, 0, prefixtree, prefixcnt, 0);
   if (idx < 0) {
     return idx;
+  }
+  if (idx != len) {
+    return SP_FORMERROR;
   }
   return 0;
 }
@@ -1708,11 +1721,19 @@ static int spell_read_tree(FILE *fd, uint8_t **bytsp, int *bytsp_len, idx_T **id
 /// @param startidx  current index in "byts" and "idxs"
 /// @param prefixtree  true for reading PREFIXTREE
 /// @param maxprefcondnr  maximum for <prefcondnr>
+/// @param depth  recursion level
 static idx_T read_tree_node(FILE *fd, uint8_t *byts, idx_T *idxs, int maxidx, idx_T startidx,
-                            bool prefixtree, int maxprefcondnr)
+                            bool prefixtree, int maxprefcondnr, int depth)
 {
   idx_T idx = startidx;
 #define SHARED_MASK     0x8000000
+
+  // Bail out on a crafted .spl whose tree recurses beyond the maximum
+  // word length: each tree level corresponds to one byte of a word, so
+  // any well-formed file has depth <= MAXWLEN.
+  if (depth > MAXWLEN) {
+    return SP_FORMERROR;
+  }
 
   int len = getc(fd);                                       // <siblingcount>
   if (len <= 0) {
@@ -1794,7 +1815,8 @@ static idx_T read_tree_node(FILE *fd, uint8_t *byts, idx_T *idxs, int maxidx, id
         idxs[startidx + i] &= ~SHARED_MASK;
       } else {
         idxs[startidx + i] = idx;
-        idx = read_tree_node(fd, byts, idxs, maxidx, idx, prefixtree, maxprefcondnr);
+        idx = read_tree_node(fd, byts, idxs, maxidx, idx,
+                             prefixtree, maxprefcondnr, depth + 1);
         if (idx < 0) {
           break;
         }
@@ -2435,6 +2457,8 @@ static afffile_T *spell_read_aff(spellinfo_T *spin, char *fname)
             char buf[MAXLINELEN];
 
             aff_entry->ae_cond = getroom_save(spin, items[4]);
+            // Note: this silently truncates the buffer, but this should
+            // not happen in practice
             snprintf(buf, sizeof(buf), *items[0] == 'P' ? "^%s" : "%s$", items[4]);
             aff_entry->ae_prog = vim_regcomp(buf, RE_MAGIC + RE_STRING + RE_STRICT);
             if (aff_entry->ae_prog == NULL) {
@@ -3389,7 +3413,9 @@ static int store_aff_word(spellinfo_T *spin, char *word, char *afflist, afffile_
                   MB_PTR_ADV(p);
                 }
               }
-              strcat(newword, p);
+              // Note: this silently truncates the buffer, but this should
+              // not happen in practice
+              xstrlcat(newword, p, MAXWLEN);
             } else {
               // suffix: chop/add at the end of the word
               xstrlcpy(newword, word, MAXWLEN);
@@ -3403,7 +3429,9 @@ static int store_aff_word(spellinfo_T *spin, char *word, char *afflist, afffile_
                 *p = NUL;
               }
               if (ae->ae_add != NULL) {
-                strcat(newword, ae->ae_add);
+                // Note: this silently truncates the buffer, but this should
+                // not happen in practice
+                xstrlcat(newword, ae->ae_add, MAXWLEN);
               }
             }
 
@@ -4926,7 +4954,7 @@ static int sug_filltree(spellinfo_T *spin, slang_T *slang)
         spin->si_blocks_cnt = 0;
 
         // Skip over any other NUL bytes (same word with different
-        // flags).  But don't go over the end.
+        // flags).  But don't go over the end
         while (n + 1 < slang->sl_fbyts_len && byts[n + 1] == 0) {
           n++;
           curi[depth]++;

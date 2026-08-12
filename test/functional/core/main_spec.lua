@@ -4,6 +4,7 @@ local Screen = require('test.functional.ui.screen')
 local uv = vim.uv
 
 local eq = t.eq
+local pcall_err = t.pcall_err
 local matches = t.matches
 local feed = n.feed
 local eval = n.eval
@@ -215,7 +216,10 @@ describe('vim._core', function()
     t.matches("^module 'vim%.hl' not found:", t.pcall_err(n.exec_lua, [[require('vim.hl')]]))
 
     -- All `vim._core.*` modules are builtin.
-    t.eq({ 'serverlist' }, n.exec_lua([[return vim.tbl_keys(require('vim._core.server'))]]))
+    t.eq(
+      { 'ex_session_restart', 'rebind_after_restart', 'serverlist' },
+      n.exec_lua([[local k = vim.tbl_keys(require('vim._core.server')); table.sort(k); return k]])
+    )
     local expected = {
       'vim.F',
       'vim._core.defaults',

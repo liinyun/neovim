@@ -16,6 +16,7 @@ local testprg = n.testprg
 local write_file = t.write_file
 local command = n.command
 local matches = t.matches
+local not_matches = t.not_matches
 local exec_lua = n.exec_lua
 local sleep = vim.uv.sleep
 local fn = n.fn
@@ -122,6 +123,14 @@ describe(':terminal buffer', function()
       ^tty ready                                         |
       appended tty ready                                |*5
                                                         |
+    ]])
+    -- pasting expression register shouldn't leak memory
+    feed([["="abcd\nefghi"<CR>pi]])
+    screen:expect([[
+      appended tty ready                                |*4
+      abcd                                              |
+      efghi^                                             |
+      {5:-- TERMINAL --}                                    |
     ]])
   end)
 
@@ -231,6 +240,9 @@ describe(':terminal buffer', function()
 
   it('requires bang (!) to close a running job #15402', function()
     eq('Vim(wqall):E948: Job still running (add ! to end the job)', pcall_err(command, 'wqall'))
+    command('redir => g:wqall_out | silent! wqall | redir END')
+    matches('E948:', api.nvim_get_var('wqall_out'))
+    not_matches('E676:', api.nvim_get_var('wqall_out'))
     for _, cmd in ipairs({ 'bdelete', '%bdelete', 'bwipeout', 'bunload' }) do
       matches(
         '^Vim%('
@@ -728,14 +740,14 @@ describe(':terminal buffer', function()
       exec_lua([[
         local term = vim.api.nvim_open_term(0, {})
         vim.api.nvim_create_autocmd('TermRequest', {
-          buffer = 0,
+          buf = 0,
           callback = function(ev)
             _G.sequence = ev.data.sequence
             _G.v_termrequest = vim.v.termrequest
           end,
         })
         vim.api.nvim_create_autocmd('TermEnter', {
-          buffer = 0,
+          buf = 0,
           callback = function()
             vim.api.nvim_chan_send(term, '\027]11;?\027\\')
             _G.result = vim.wait(3000, function()

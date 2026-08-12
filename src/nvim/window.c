@@ -2632,7 +2632,7 @@ void close_windows(buf_T *buf, bool keep_curwin)
           }
           if (!win_close_othertab(wp, false, tp, false)) {
             // If closing the window fails give up, to avoid looping forever.
-            break;
+            goto theend;
           }
 
           // Start all over, the tab page may be closed and
@@ -2853,7 +2853,7 @@ int win_close(win_T *win, bool free_buf, bool force)
       // close the last window until the there are no floating windows
       while (lastwin->w_floating) {
         // `force` flag isn't actually used when closing a floating window.
-        if (win_close(lastwin, free_buf, true) == FAIL) {
+        if (win_close(lastwin, !buf_hide(lastwin->w_buffer), true) == FAIL) {
           // If closing the window fails give up, to avoid looping forever.
           return FAIL;
         }
@@ -3216,7 +3216,7 @@ bool win_close_othertab(win_T *win, int free_buf, tabpage_T *tp, bool force)
       // close the last window until the there are no floating windows
       while (tp->tp_lastwin->w_floating) {
         // `force` flag isn't actually used when closing a floating window.
-        if (!win_close_othertab(tp->tp_lastwin, free_buf, tp, true)) {
+        if (!win_close_othertab(tp->tp_lastwin, !buf_hide(tp->tp_lastwin->w_buffer), tp, true)) {
           // If closing the window fails give up, to avoid looping forever.
           goto leave_open;
         }
@@ -3299,6 +3299,13 @@ bool win_close_othertab(win_T *win, int free_buf, tabpage_T *tp, bool force)
     if (h != tabline_height()) {
       win_new_screen_rows();
     }
+  }
+
+  if (ui_has(kUIMultigrid)) {
+    ui_call_win_close(win->w_grid_alloc.handle);
+  }
+  if (win->w_floating) {
+    ui_comp_remove_grid(&win->w_grid_alloc);
   }
 
   // About to free the window. Remember its final buffer for terminal_check_size/TabClosed,
@@ -6853,7 +6860,7 @@ static void win_fix_cursor(bool normal)
 
   wp->w_do_win_fix_cursor = false;
   // Determine valid cursor range.
-  int so = MIN(wp->w_view_height / 2, get_scrolloff_value(wp));
+  int so = (int)MIN(wp->w_view_height / 2, get_scrolloff_value(wp));
   linenr_T lnum = wp->w_cursor.lnum;
 
   wp->w_cursor.lnum = wp->w_topline;

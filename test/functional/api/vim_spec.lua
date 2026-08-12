@@ -29,7 +29,6 @@ local next_msg = n.next_msg
 local tmpname = t.tmpname
 local write_file = t.write_file
 local exec_lua = n.exec_lua
-local exc_exec = n.exc_exec
 local insert = n.insert
 local skip = t.skip
 
@@ -442,6 +441,8 @@ describe('API', function()
     it('redir_write() message column is reset with ext_messages', function()
       exec_lua('vim.ui_attach(1, { ext_messages = true }, function() end)')
       api.nvim_exec2('hi VisualNC', { output = true })
+      eq('VisualNC       xxx cleared', api.nvim_exec2('hi VisualNC', { output = true }).output)
+      api.nvim_exec2('echon 1234567', { output = true })
       eq('VisualNC       xxx cleared', api.nvim_exec2('hi VisualNC', { output = true }).output)
     end)
 
@@ -1228,6 +1229,67 @@ describe('API', function()
       end)
       run_streamed_paste_tests()
     end)
+    describe('stream: terminal buffer', function()
+      local eol = is_os('win') and '\r\n' or '\n'
+      before_each(function()
+        exec_lua(function()
+          _G.input = {}
+          _G.chan = vim.api.nvim_open_term(0, {
+            on_input = function(_, _, _, data)
+              if #data > 0 then
+                table.insert(_G.input, data)
+              end
+            end,
+            force_crlf = false,
+          })
+        end)
+      end)
+      local function run_terminal_streamed_paste_tests(check_dot_repeat)
+        it('without bracketed paste mode in terminal', function()
+          api.nvim_paste('AA\nBB\n', false, 1)
+          eq({ 'AA', eol, 'BB', eol }, exec_lua('return _G.input'))
+          api.nvim_paste('CC', false, 2)
+          eq({ 'AA', eol, 'BB', eol, 'CC' }, exec_lua('return _G.input'))
+          api.nvim_paste('\nDD', false, 3)
+          eq({ 'AA', eol, 'BB', eol, 'CC', eol, 'DD' }, exec_lua('return _G.input'))
+          if check_dot_repeat then
+            exec_lua('_G.input = {}')
+            feed('.')
+            eq({ 'AA', eol, 'BB', eol, 'CC', eol, 'DD' }, exec_lua('return _G.input'))
+          end
+        end)
+        it('with bracketed paste mode in terminal', function()
+          exec_lua([[vim.api.nvim_chan_send(_G.chan, '\027[?2004h')]])
+          api.nvim_paste('AA\nBB\n', false, 1)
+          eq({ '\027[200~', 'AA', eol, 'BB', eol }, exec_lua('return _G.input'))
+          api.nvim_paste('CC', false, 2)
+          eq({ '\027[200~', 'AA', eol, 'BB', eol, 'CC' }, exec_lua('return _G.input'))
+          api.nvim_paste('\nDD', false, 3)
+          eq(
+            { '\027[200~', 'AA', eol, 'BB', eol, 'CC', eol, 'DD', '\027[201~' },
+            exec_lua('return _G.input')
+          )
+          if check_dot_repeat then
+            exec_lua('_G.input = {}')
+            feed('.')
+            eq(
+              { '\027[200~', 'AA', eol, 'BB', eol, 'CC', eol, 'DD', '\027[201~' },
+              exec_lua('return _G.input')
+            )
+          end
+        end)
+      end
+      describe('in Normal mode', function()
+        run_terminal_streamed_paste_tests(true)
+      end)
+      describe('in Terminal mode', function()
+        before_each(function()
+          feed('i')
+          eq({ mode = 't', blocking = false }, api.nvim_get_mode())
+        end)
+        run_terminal_streamed_paste_tests(false)
+      end)
+    end)
     it('non-streaming', function()
       -- With final "\n".
       api.nvim_paste('line 1\nline 2\nline 3\n', true, -1)
@@ -1947,7 +2009,6 @@ describe('API', function()
     it('getting current buffer option does not adjust cursor #19381', function()
       command('new')
       local buf = api.nvim_get_current_buf()
-      print(vim.inspect(api.nvim_get_current_buf()))
       local win = api.nvim_get_current_win()
       insert('some text')
       feed('0v$')
@@ -2863,7 +2924,8 @@ describe('API', function()
         id = id,
         argv = argv,
         mode = 'terminal',
-        buffer = buffer,
+        buf = buffer,
+        buffer = buffer, -- deprecated
         pty = '?',
         exitcode = -1,
       }
@@ -2883,7 +2945,8 @@ describe('API', function()
         neq(nil, string.match(info.pty, '^/dev/'))
       end
       eq({ info = info }, event)
-      info.buffer = 1
+      info.buf = 1
+      info.buffer = 1 -- deprecated
       eq({ [1] = testinfo, [2] = stderr, [3] = info }, api.nvim_list_chans())
       eq(info, api.nvim_get_chan_info(3))
 
@@ -2916,9 +2979,10 @@ describe('API', function()
 
       -- :terminal with args + stopped process (shell-test).
       command('enew')
-      argv = { n.testprg('shell-test'), 'INTERACT' }
+      -- Use a process that doesn't read stdin, so PTY EOF can't race SIGHUP.
+      argv = { n.testprg('shell-test'), 'HOLD' }
       fn.jobstart(argv, { term = true })
-      screen:expect({ any = { vim.pesc('interact $') } })
+      screen:expect({ any = { vim.pesc('holding $') } })
       eq(1, eval('jobstop(&channel)'))
       eval('jobwait([&channel], 1000)') -- Wait.
       local expected3 = term_channel_info(5, 3, argv)
@@ -3593,7 +3657,7 @@ describe('API', function()
 
       eq(
         'Vim(echo):E5555: API call: Vim:E220: Missing }.',
-        exc_exec("echo nvim_get_runtime_file('{', v:false)")
+        pcall_err(command, "echo nvim_get_runtime_file('{', v:false)")
       )
     end)
     it('preserves order of runtimepath', function()
@@ -3605,6 +3669,23 @@ describe('API', function()
       eq(2, #val)
       eq(p(val[1]), vimruntime .. '/syntax/vim.vim')
       eq(p(val[2]), vimruntime .. '/ftplugin/vim.vim')
+    end)
+
+    it('finds files via an 8.3 filename path #25019', function()
+      skip(not is_os('win'), 'N/A: 8.3 filenames are only available on Windows')
+      local path = 'Xtest_runtime_path'
+      mkdir_p(('%s/subdir/lua'):format(path))
+      write_file(('%s/subdir/lua/foo.lua'):format(path), '')
+      finally(function()
+        rmdir(path)
+      end)
+      local path_with_shortname =
+        p(fn.system(('for %%I in ("%s") do @echo %%~sI'):format(path), ''):gsub('\n', ''))
+      skip(path == vim.fs.basename(path_with_shortname), 'N/A: 8.3 filenames are disabled')
+      exec_lua(('vim.opt.rtp:prepend("%s/*")'):format(path_with_shortname))
+      local val = api.nvim_get_runtime_file('lua/foo.lua', true)
+      eq(1, #val)
+      eq(('%s/subdir/lua/foo.lua'):format(path_with_shortname), val[1])
     end)
   end)
 

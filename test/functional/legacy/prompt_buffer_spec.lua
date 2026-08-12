@@ -11,6 +11,7 @@ local expect = n.expect
 local poke_eventloop = n.poke_eventloop
 local api = n.api
 local eq = t.eq
+local pcall_err = t.pcall_err
 local neq = t.neq
 local exec_lua = n.exec_lua
 
@@ -1071,5 +1072,57 @@ describe('prompt buffer', function()
     api.nvim_set_option_value('buftype', 'prompt', { buf = unloaded_buf })
     fn('prompt_setprompt', unloaded_buf, 'hello unloaded! > ')
     eq('hello unloaded! > ', fn('prompt_getprompt', unloaded_buf))
+  end)
+
+  it('prompt_appendbuf with multi-element list and singleline prompt', function()
+    command('new')
+    local buf = api.nvim_get_current_buf()
+    api.nvim_set_option_value('buftype', 'prompt', { buf = buf })
+    fn('prompt_setprompt', buf, 'cmd: ')
+
+    -- Single element list: appends before prompt
+    fn('prompt_appendbuf', buf, { 'line1' })
+    eq({ 'line1', 'cmd: ' }, api.nvim_buf_get_lines(buf, 0, -1, false))
+
+    -- Multi-element list: first element appended, rest inserted as new lines before prompt
+    fn('prompt_appendbuf', buf, { '-append', 'line2' })
+    eq({ 'line1-append', 'line2', 'cmd: ' }, api.nvim_buf_get_lines(buf, 0, -1, false))
+
+    -- Multi-element list after multi-element list
+    fn('prompt_appendbuf', buf, { '', 'line3', 'line4', 'line5', 'line6' })
+    eq(
+      { 'line1-append', 'line2', 'line3', 'line4', 'line5', 'line6', 'cmd: ' },
+      api.nvim_buf_get_lines(buf, 0, -1, false)
+    )
+  end)
+
+  it('prompt_appendbuf with multi-element list and multiline prompt', function()
+    command('new')
+    local buf = api.nvim_get_current_buf()
+    api.nvim_set_option_value('buftype', 'prompt', { buf = buf })
+    fn('prompt_setprompt', buf, 'cmd: ')
+    source('startinsert')
+
+    -- User types multiline input in the prompt
+    feed('input1<s-cr>input2')
+    eq({ 'cmd: input1', 'input2' }, api.nvim_buf_get_lines(buf, 0, -1, false))
+
+    -- Single element list: appends before prompt
+    fn('prompt_appendbuf', buf, { 'line1' })
+    eq({ 'line1', 'cmd: input1', 'input2' }, api.nvim_buf_get_lines(buf, 0, -1, false))
+
+    -- Multi-element list: first element appended, rest inserted as new lines before prompt
+    fn('prompt_appendbuf', buf, { '-append', 'line2' })
+    eq(
+      { 'line1-append', 'line2', 'cmd: input1', 'input2' },
+      api.nvim_buf_get_lines(buf, 0, -1, false)
+    )
+
+    -- Multi-element list after multi-element list
+    fn('prompt_appendbuf', buf, { '', 'line3', 'line4', 'line5', 'line6' })
+    eq(
+      { 'line1-append', 'line2', 'line3', 'line4', 'line5', 'line6', 'cmd: input1', 'input2' },
+      api.nvim_buf_get_lines(buf, 0, -1, false)
+    )
   end)
 end)

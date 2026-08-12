@@ -1,4 +1,5 @@
 local t = require('test.testutil')
+local pcall_err = t.pcall_err
 local n = require('test.functional.testnvim')()
 
 local clear, eval, eq = n.clear, n.eval, t.eq
@@ -45,5 +46,13 @@ describe('v:argf', function()
     local abs3 = n.fn.fnamemodify(file3, ':p')
 
     eq({ abs1, abs2, abs3 }, n.eval('v:argf'))
+  end)
+end)
+
+describe('v:startreason', function()
+  it('is read-only and starts as "normal"', function()
+    n.clear { args = { '--cmd', 'let g:early_startreason = v:startreason' } }
+    eq('normal', eval('g:early_startreason'))
+    t.matches('E46', t.pcall_err(command, "let v:startreason = 'restart'"))
   end)
 end)

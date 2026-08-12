@@ -16,8 +16,8 @@ local validate = vim.validate
 ---
 --- Example:
 --- ```lua
---- local pos1 = vim.pos(3, 5)
---- local pos2 = vim.pos(4, 0)
+--- local pos1 = vim.pos(0, 3, 5)
+--- local pos2 = vim.pos(0, 4, 0)
 ---
 --- -- Operators are overloaded for comparing two `vim.Pos` objects.
 --- if pos1 < pos2 then
@@ -35,21 +35,16 @@ local validate = vim.validate
 ---@class vim.Pos
 ---@field row integer 0-based byte index.
 ---@field col integer 0-based byte index.
----
---- Optional buffer handle.
----
---- When specified, it indicates that this position belongs to a specific buffer.
---- This field is required when performing position conversions.
----@field buf? integer
+---@field buf integer buffer handle.
 ---@field private [1] integer underlying representation of row
 ---@field private [2] integer underlying representation of col
 ---@field private [3] integer underlying representation of buf
-local Pos = {}
+local M = {}
 
 ---@private
 ---@param pos vim.Pos
 ---@param key any
-function Pos.__index(pos, key)
+function M.__index(pos, key)
   if key == 'row' then
     return pos[1]
   elseif key == 'col' then
@@ -58,30 +53,28 @@ function Pos.__index(pos, key)
     return pos[3]
   end
 
-  return Pos[key]
+  return M[key]
 end
 
----@class vim.Pos.Optional
----@inlinedoc
----@field buf? integer
-
 ---@package
+---@param buf integer
 ---@param row integer
 ---@param col integer
----@param opts? vim.Pos.Optional
-function Pos.new(row, col, opts)
+function M.new(buf, row, col)
+  validate('buf', buf, 'number')
   validate('row', row, 'number')
   validate('col', col, 'number')
-  validate('opts', opts, 'table', true)
 
-  opts = opts or {}
+  if buf == 0 then
+    buf = api.nvim_get_current_buf()
+  end
 
   ---@type vim.Pos
   local self = setmetatable({
     row,
     col,
-    opts.buf,
-  }, Pos)
+    buf,
+  }, M)
 
   return self
 end
@@ -93,15 +86,15 @@ end
 --- 0: a == b
 --- -1: a < b
 local function cmp_pos(p1, p2)
-  if p1.row == p2.row then
-    if p1.col > p2.col then
+  if p1[1] == p2[1] then
+    if p1[2] > p2[2] then
       return 1
-    elseif p1.col < p2.col then
+    elseif p1[2] < p2[2] then
       return -1
     else
       return 0
     end
-  elseif p1.row > p2.row then
+  elseif p1[1] > p2[1] then
     return 1
   end
 
@@ -109,17 +102,17 @@ local function cmp_pos(p1, p2)
 end
 
 ---@private
-function Pos.__lt(...)
+function M.__lt(...)
   return cmp_pos(...) == -1
 end
 
 ---@private
-function Pos.__le(...)
+function M.__le(...)
   return cmp_pos(...) ~= 1
 end
 
 ---@private
-function Pos.__eq(...)
+function M.__eq(...)
   return cmp_pos(...) == 0
 end
 
@@ -134,21 +127,18 @@ end
 ---
 --- Example:
 --- ```lua
---- -- `buf` is required for conversion to LSP position.
---- local buf = vim.api.nvim_get_current_buf()
---- local pos = vim.pos(3, 5, { buf = buf })
+--- local pos = vim.pos(0, 3, 5)
 ---
 --- -- Convert to LSP position, you can call it in a method style.
---- local lsp_pos = pos:lsp('utf-16')
+--- local lsp_pos = pos:to_lsp('utf-16')
 --- ```
 ---@param pos vim.Pos
 ---@param position_encoding lsp.PositionEncodingKind
-function Pos.to_lsp(pos, position_encoding)
+function M.to_lsp(pos, position_encoding)
   validate('pos', pos, 'table')
   validate('position_encoding', position_encoding, 'string')
 
-  local buf = assert(pos.buf, 'position is not a buffer position')
-  local row, col = pos.row, pos.col
+  local buf, row, col = pos.buf, pos[1], pos[2]
   -- When on the first character,
   -- we can ignore the difference between byte and character.
   if col > 0 then
@@ -163,22 +153,24 @@ end
 ---
 --- Example:
 --- ```lua
---- local buf = vim.api.nvim_get_current_buf()
 --- local lsp_pos = {
 ---   line = 3,
 ---   character = 5
 --- }
 ---
---- -- `buf` is mandatory, as LSP positions are always associated with a buffer.
---- local pos = vim.pos.lsp(buf, lsp_pos, 'utf-16')
+--- local pos = vim.pos.lsp(0, lsp_pos, 'utf-16')
 --- ```
 ---@param buf integer
 ---@param pos lsp.Position
 ---@param position_encoding lsp.PositionEncodingKind
-function Pos.lsp(buf, pos, position_encoding)
+function M.lsp(buf, pos, position_encoding)
   validate('buf', buf, 'number')
   validate('pos', pos, 'table')
   validate('position_encoding', position_encoding, 'string')
+
+  if buf == 0 then
+    buf = api.nvim_get_current_buf()
+  end
 
   local row, col = pos.line, pos.character
   -- When on the first character,
@@ -189,32 +181,31 @@ function Pos.lsp(buf, pos, position_encoding)
     col = vim.str_byteindex(get_line(buf, row), position_encoding, col, false)
   end
 
-  return Pos.new(row, col, { buf = buf })
+  return M.new(buf, row, col)
 end
 
 --- Converts |vim.Pos| to cursor position (see |api-indexing|).
 ---@param pos vim.Pos
 ---@return integer, integer
-function Pos.to_cursor(pos)
-  return pos.row + 1, pos.col
+function M.to_cursor(pos)
+  return pos[1] + 1, pos[2]
 end
 
 --- Creates a new |vim.Pos| from cursor position (see |api-indexing|).
+---@param buf integer
 ---@param pos [integer, integer]
----@param opts vim.Pos.Optional|nil
-function Pos.cursor(pos, opts)
-  return Pos.new(pos[1] - 1, pos[2], opts)
+function M.cursor(buf, pos)
+  return M.new(buf, pos[1] - 1, pos[2])
 end
 
 --- Converts |vim.Pos| to extmark position (see |api-indexing|).
 ---@param pos vim.Pos
 ---@return integer, integer
-function Pos.to_extmark(pos)
+function M.to_extmark(pos)
   local line_count = api.nvim_buf_line_count(pos.buf)
 
-  local row = pos.row
-  local col = pos.col
-  if pos.col == 0 and pos.row == line_count then
+  local row, col = pos[1], pos[2]
+  if col == 0 and row == line_count then
     row = row - 1
     col = #get_line(pos.buf, row)
   end
@@ -223,19 +214,50 @@ function Pos.to_extmark(pos)
 end
 
 --- Creates a new |vim.Pos| from extmark position (see |api-indexing|).
+---@param buf integer
 ---@param row integer
 ---@param col integer
----@param opts vim.Pos.Optional|nil
-function Pos.extmark(row, col, opts)
-  return Pos.new(row, col, opts)
+function M.extmark(buf, row, col)
+  if buf == 0 then
+    buf = api.nvim_get_current_buf()
+  end
+
+  return M.new(buf, row, col)
+end
+
+--- Converts |vim.Pos| to buffer offset.
+---@param pos vim.Pos
+---@return integer
+function M.to_offset(pos)
+  return api.nvim_buf_get_offset(pos.buf, pos[1]) + pos[2]
+end
+
+--- Creates a new |vim.Pos| from buffer offset.
+---@param buf integer
+---@param offset integer
+---@return vim.Pos
+function M.offset(buf, offset)
+  local lnum = vim.list.bisect(
+    setmetatable({}, {
+      __index = function(_, lnum)
+        return api.nvim_buf_get_offset(buf, lnum - 1)
+      end,
+    }),
+    offset,
+    { lo = 1, hi = api.nvim_buf_line_count(buf) + 2, bound = 'upper' }
+  ) - 1
+
+  local row = lnum - 1
+  local col = offset - api.nvim_buf_get_offset(buf, row)
+  return M.new(buf, row, col)
 end
 
 -- Overload `Range.new` to allow calling this module as a function.
-setmetatable(Pos, {
+setmetatable(M, {
   __call = function(_, ...)
-    return Pos.new(...)
+    return M.new(...)
   end,
 })
----@cast Pos +fun(row: integer, col: integer, opts: vim.Pos.Optional?): vim.Pos
+---@cast M +fun(buf: integer, row: integer, col: integer): vim.Pos
 
-return Pos
+return M

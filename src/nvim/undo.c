@@ -712,7 +712,7 @@ char *u_get_undo_file_name(const char *const buf_ffname, const bool reading)
 
       // Remove trailing pathseps from directory name
       char *p = &dir_name[dir_len - 1];
-      while (vim_ispathsep(*p)) {
+      while (dir_len > 1 && vim_ispathsep(*p)) {
         *p-- = NUL;
       }
 
@@ -1565,36 +1565,48 @@ void u_read_undo(char *name, const uint8_t *hash, const char *orig_name FUNC_ATT
         goto error;
       }
     }
-    for (int j = 0; j < num_head; j++) {
-      if (uhp_table[j] != NULL
-          && uhp_table[j]->uh_seq == uhp->uh_next.seq) {
-        uhp->uh_next.ptr = uhp_table[j];
-        SET_FLAG(j);
-        break;
+    {
+      const int seq = uhp->uh_next.seq;
+      uhp->uh_next.ptr = NULL;
+      for (int j = 0; j < num_head; j++) {
+        if (uhp_table[j] != NULL && i != j && uhp_table[j]->uh_seq == seq) {
+          uhp->uh_next.ptr = uhp_table[j];
+          SET_FLAG(j);
+          break;
+        }
       }
     }
-    for (int j = 0; j < num_head; j++) {
-      if (uhp_table[j] != NULL
-          && uhp_table[j]->uh_seq == uhp->uh_prev.seq) {
-        uhp->uh_prev.ptr = uhp_table[j];
-        SET_FLAG(j);
-        break;
+    {
+      const int seq = uhp->uh_prev.seq;
+      uhp->uh_prev.ptr = NULL;
+      for (int j = 0; j < num_head; j++) {
+        if (uhp_table[j] != NULL && i != j && uhp_table[j]->uh_seq == seq) {
+          uhp->uh_prev.ptr = uhp_table[j];
+          SET_FLAG(j);
+          break;
+        }
       }
     }
-    for (int j = 0; j < num_head; j++) {
-      if (uhp_table[j] != NULL
-          && uhp_table[j]->uh_seq == uhp->uh_alt_next.seq) {
-        uhp->uh_alt_next.ptr = uhp_table[j];
-        SET_FLAG(j);
-        break;
+    {
+      const int seq = uhp->uh_alt_next.seq;
+      uhp->uh_alt_next.ptr = NULL;
+      for (int j = 0; j < num_head; j++) {
+        if (uhp_table[j] != NULL && i != j && uhp_table[j]->uh_seq == seq) {
+          uhp->uh_alt_next.ptr = uhp_table[j];
+          SET_FLAG(j);
+          break;
+        }
       }
     }
-    for (int j = 0; j < num_head; j++) {
-      if (uhp_table[j] != NULL
-          && uhp_table[j]->uh_seq == uhp->uh_alt_prev.seq) {
-        uhp->uh_alt_prev.ptr = uhp_table[j];
-        SET_FLAG(j);
-        break;
+    {
+      const int seq = uhp->uh_alt_prev.seq;
+      uhp->uh_alt_prev.ptr = NULL;
+      for (int j = 0; j < num_head; j++) {
+        if (uhp_table[j] != NULL && i != j && uhp_table[j]->uh_seq == seq) {
+          uhp->uh_alt_prev.ptr = uhp_table[j];
+          SET_FLAG(j);
+          break;
+        }
       }
     }
     if (old_header_seq > 0 && old_idx < 0 && uhp->uh_seq == old_header_seq) {

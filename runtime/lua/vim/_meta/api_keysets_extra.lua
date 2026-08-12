@@ -1,7 +1,9 @@
 --- @meta _
+-- This file is NOT generated, edit it directly. See also _meta/api_keysets.gen.lua.
+
 error('Cannot require a meta file')
 
---- Extra types we can't generate keysets for
+--- Extra types we don't define keysets for.
 
 --- @class vim.api.keyset.extmark_details
 --- @field ns_id integer
@@ -65,7 +67,7 @@ error('Cannot require a meta file')
 --- @field once? boolean
 --- @field pattern? string
 --- @field buflocal? boolean
---- @field buffer? integer
+--- @field buf? integer
 
 --- @class vim.api.keyset.create_autocmd.callback_args
 --- @field id integer autocommand id
@@ -74,7 +76,7 @@ error('Cannot require a meta file')
 --- @field match string expanded value of <amatch>
 --- @field buf integer expanded value of <abuf>
 --- @field file string expanded value of <afile>
---- @field data? any arbitrary data passed from |nvim_exec_autocmds()|                       *event-data*
+--- @field data? any arbitrary data passed from |nvim_exec_autocmds()|
 
 --- @class vim.api.keyset.create_user_command.command_args
 --- @field name string Command name
@@ -150,13 +152,15 @@ error('Cannot require a meta file')
 --- @field background? integer
 
 --- @class vim.api.keyset.get_hl_info : vim.api.keyset.hl_info.base
---- @field fg? integer
---- @field bg? integer
---- @field sp? integer
---- @field default? true
---- @field link? string
 --- @field blend? integer
+--- @field bg? integer
+--- @field bg_indexed? boolean
 --- @field cterm? vim.api.keyset.hl_info.cterm
+--- @field default? true
+--- @field fg? integer
+--- @field fg_indexed? boolean
+--- @field link? string
+--- @field sp? integer
 
 --- @class vim.api.keyset.set_hl_info : vim.api.keyset.hl_info.base
 --- @field fg? integer|string
@@ -170,7 +174,7 @@ error('Cannot require a meta file')
 
 --- @class vim.api.keyset.get_keymap
 --- @field abbr? 0|1
---- @field buffer? 0|1
+--- @field buf? 0|1
 --- @field callback? function
 --- @field desc? string
 --- @field expr? 0|1

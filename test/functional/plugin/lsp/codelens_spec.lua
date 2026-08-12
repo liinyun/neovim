@@ -306,6 +306,58 @@ describe('vim.lsp.codelens', function()
     ]])
   end)
 
+  it('refreshes immediately and cancels a pending automatic refresh', function()
+    exec_lua(function()
+      local deferred
+      local request_count = 0
+      local defer_fn = vim.defer_fn
+      local client = assert(vim.lsp.get_client_by_id(client_id))
+      local request = client.request
+
+      --- @diagnostic disable-next-line: duplicate-set-field
+      vim.defer_fn = function(callback)
+        deferred = {
+          callback = callback,
+          closed = false,
+          stopped = false,
+          is_closing = function(self)
+            return self.closed
+          end,
+          stop = function(self)
+            self.stopped = true
+          end,
+          close = function(self)
+            self.closed = true
+          end,
+        }
+        return deferred
+      end
+
+      client.request = function(self, method, ...)
+        if method == 'textDocument/codeLens' then
+          request_count = request_count + 1
+        end
+        return request(self, method, ...)
+      end
+
+      vim.api.nvim_buf_set_lines(0, 0, 0, false, { '// changed' })
+      assert(deferred, 'expected pending automatic codelens refresh')
+
+      vim.lsp.codelens.on_refresh(
+        nil,
+        nil,
+        { method = 'workspace/codeLens/refresh', client_id = client_id }
+      )
+
+      vim.defer_fn = defer_fn
+      client.request = request
+
+      assert(deferred.stopped, 'expected pending codelens refresh to stop')
+      assert(deferred.closed, 'expected pending codelens refresh to close')
+      assert(request_count == 1, 'expected exactly one immediate codelens refresh request')
+    end)
+  end)
+
   it('ignores stale codeLens/resolve responses', function()
     clear_notrace()
     exec_lua(create_server_definition)
@@ -377,6 +429,85 @@ describe('vim.lsp.codelens', function()
           return _G.stale_resolve_sent
         end),
         'timed out waiting for stale resolve response'
+      )
+    end)
+
+    eq('', api.nvim_get_vvar('errmsg'))
+  end)
+
+  it('ignores refresh responses for deleted buffer', function()
+    clear_notrace()
+    exec_lua(create_server_definition)
+
+    insert('line1\n')
+
+    exec_lua(function()
+      local codelens_request_count = 0
+      _G.refresh_response_sent = false
+      _G.server = _G._create_server({
+        capabilities = {
+          codeLensProvider = {
+            resolveProvider = true,
+          },
+        },
+        handlers = {
+          ['textDocument/codeLens'] = function(_, _, callback)
+            codelens_request_count = codelens_request_count + 1
+
+            local lenses = {
+              {
+                command = {
+                  arguments = {},
+                  command = 'dummy.command',
+                  title = 'Lens',
+                },
+                range = {
+                  ['end'] = {
+                    character = 1,
+                    line = 0,
+                  },
+                  start = {
+                    character = 0,
+                    line = 0,
+                  },
+                },
+              },
+            }
+
+            if codelens_request_count == 1 then
+              callback(nil, lenses)
+            else
+              -- Delay the refresh response so the buffer is wiped before it arrives.
+              vim.schedule(function()
+                _G.refresh_response_sent = true
+                callback(nil, lenses)
+              end)
+            end
+          end,
+        },
+      })
+
+      local client_id = vim.lsp.start({ name = 'dummy', cmd = _G.server.cmd })
+      vim.lsp.codelens.enable()
+
+      assert(
+        vim.wait(1000, function()
+          return #vim.lsp.codelens.get() > 0
+        end),
+        'timed out waiting for initial codelens response'
+      )
+
+      vim.lsp.codelens.on_refresh(nil, nil, {
+        method = 'workspace/codeLens/refresh',
+        client_id = client_id,
+      })
+      vim.cmd.bwipeout({ bang = true })
+
+      assert(
+        vim.wait(1000, function()
+          return _G.refresh_response_sent
+        end),
+        'timed out waiting for refresh response'
       )
     end)
 

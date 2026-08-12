@@ -822,12 +822,14 @@ local function test_cmdline(linegrid)
       cmdline = { { content = { { '' } }, firstc = ':', pos = 0 } },
       cmdline_block = { { { 'echo "foo"' } } },
     })
-    feed('vis<CR>')
+    -- Shouldn't crash for NULL cmdline_block event after <C-\><C-N> #39021.
+    feed('<C-\\><C-N>vis<CR>')
     screen:expect([[
       ^                         |
       {1:~                        }|*3
                                |
     ]])
+    assert_alive()
   end)
 
   it('works with :lua debug.debug()', function()
@@ -1058,6 +1060,27 @@ describe('cmdline redraw', function()
       {1:~                                                                          }|*3
       1 substitution on 1 line                                                   |
     ]])
+  end)
+
+  it('no empty cmdline after empty echo #18274', function()
+    feed(':foo')
+    api.nvim_echo({ { '' } }, false, {})
+    screen:expect([[
+                               |
+      {1:~                        }|*3
+      :foo^                     |
+    ]])
+    feed(('o'):rep(screen._width - 4))
+    -- No repeated cmdline redraws at screen width
+    screen:expect([[
+                               |
+      {1:~                        }|
+      {3:                         }|
+      :fooooooooooooooooooooooo|
+      ^                         |
+    ]])
+    command('call timer_start(0, {-> 1})')
+    screen:expect_unchanged()
   end)
 end)
 

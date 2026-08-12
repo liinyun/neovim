@@ -38,6 +38,7 @@
 #include "nvim/msgpack_rpc/channel.h"
 #include "nvim/msgpack_rpc/server.h"
 #include "nvim/os/fs.h"
+#include "nvim/os/os.h"
 #include "nvim/os/os_defs.h"
 #include "nvim/os/shell.h"
 #include "nvim/terminal.h"
@@ -405,6 +406,10 @@ Channel *channel_job_start(char **argv, const char *exepath, CallbackReader on_s
   proc->cwd = cwd;
   proc->env = env;
   proc->overlapped = overlapped;
+#ifdef MSWIN
+  // Windows: spawn channel jobs with noinherit (so writes don't leak to TUI #40074).
+  proc->stdio_noinherit = true;
+#endif
 
   char *cmd = xstrdup(proc_get_exepath(proc));
   bool has_out, has_err;
@@ -519,7 +524,12 @@ end:
 void channel_from_connection(SocketWatcher *watcher)
 {
   Channel *channel = channel_alloc(kChannelStreamSocket);
-  socket_watcher_accept(watcher, &channel->stream.socket);
+  int result = socket_watcher_accept(watcher, &channel->stream.socket);
+  if (result != 0) {
+    ELOG("Failed to accept connection: %s", uv_strerror(result));
+    channel_destroy_early(channel);
+    return;
+  }
   channel->stream.socket.s.internal_close_cb = close_cb;
   channel->stream.socket.s.internal_data = channel;
   wstream_init(&channel->stream.socket.s, 0);
@@ -555,14 +565,24 @@ uint64_t channel_from_stdio(bool rpc, CallbackReader on_output, const char **err
     os_set_cloexec(stdin_dup_fd);
     stdout_dup_fd = os_dup(STDOUT_FILENO);
     os_set_cloexec(stdout_dup_fd);
-
-    // The server may have no console (spawned with UV_PROCESS_DETACHED for
-    // :detach support). Allocate a hidden one so CONIN$/CONOUT$ and ConPTY
-    // (:terminal) work.
-    if (!GetConsoleWindow()) {
-      AllocConsole();
-      ShowWindow(GetConsoleWindow(), SW_HIDE);
+    // :restart spawns a replacement server that must not borrow the parent
+    // Nvim process console, because that parent process will soon exit.
+    const bool restart_alloc_console = os_env_exists(ENV_RESTART_ALLOC_CONSOLE, true);
+    if (restart_alloc_console) {
+      os_unsetenv(ENV_RESTART_ALLOC_CONSOLE);
     }
+    if (!GetConsoleWindow()) {
+      // Borrow the parent's console so CONOUT$ resolves to the real terminal,
+      // preserving io.stdout rendering (e.g. SIXEL/Kitty images). Only fall
+      // back to a hidden AllocConsole when there is no parent console (e.g.
+      // launched from a non-console parent), or for the replacement server
+      // spawned by :restart, because the parent Nvim process will soon exit.
+      if (restart_alloc_console || !AttachConsole(ATTACH_PARENT_PROCESS)) {
+        AllocConsole();
+        ShowWindow(GetConsoleWindow(), SW_HIDE);
+      }
+    }
+    os_enable_ctrl_c();
     os_replace_stdin_to_conin();
     os_replace_stdout_and_stderr_to_conout();
   }
@@ -988,7 +1008,7 @@ Dict channel_info(uint64_t id, Arena *arena)
     return (Dict)ARRAY_DICT_INIT;
   }
 
-  Dict info = arena_dict(arena, 8);
+  Dict info = arena_dict(arena, 9);
   PUT_C(info, "id", INTEGER_OBJ((Integer)chan->id));
 
   const char *stream_desc, *mode_desc;
@@ -1037,6 +1057,7 @@ Dict channel_info(uint64_t id, Arena *arena)
     PUT_C(info, "client", DICT_OBJ(chan->rpc.info));
   } else if (chan->term) {
     mode_desc = "terminal";
+    PUT_C(info, "buf", BUFFER_OBJ(terminal_buf(chan->term)));
     PUT_C(info, "buffer", BUFFER_OBJ(terminal_buf(chan->term)));
     PUT_C(info, "exitcode", INTEGER_OBJ(chan->exit_status));
   } else {

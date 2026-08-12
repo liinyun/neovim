@@ -2,6 +2,7 @@
 local t = require('test.testutil')
 local n = require('test.functional.testnvim')()
 local eq = t.eq
+local dedent = t.dedent
 
 local clear = n.clear
 local exec_lua = n.exec_lua
@@ -10,19 +11,19 @@ local insert = n.insert
 describe('vim.pos', function()
   before_each(clear)
 
-  it('creates a position with or without optional fields', function()
-    local pos = exec_lua(function()
-      return vim.pos(3, 5)
+  it('creates a position', function()
+    local pos, buf = exec_lua(function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      return vim.pos(buf, 3, 5), buf
     end)
     eq(3, pos[1])
     eq(5, pos[2])
-    eq(nil, pos[3])
+    eq(buf, pos[3])
+  end)
 
-    local buf = exec_lua(function()
-      return vim.api.nvim_create_buf(false, true)
-    end)
-    pos = exec_lua(function()
-      return vim.pos(3, 5, { buf = buf })
+  it('creates a position with buf=0', function()
+    local pos, buf = exec_lua(function()
+      return vim.pos(0, 3, 5), vim.api.nvim_get_current_buf()
     end)
     eq(3, pos[1])
     eq(5, pos[2])
@@ -30,40 +31,43 @@ describe('vim.pos', function()
   end)
 
   it('comparisons by overloaded operators', function()
+    local buf = exec_lua(function()
+      return vim.api.nvim_create_buf(false, true)
+    end)
     eq(
       true,
       exec_lua(function()
-        return vim.pos(3, 5) < vim.pos(4, 5)
+        return vim.pos(buf, 3, 5) < vim.pos(buf, 4, 5)
       end)
     )
     eq(
       true,
       exec_lua(function()
-        return vim.pos(3, 5) <= vim.pos(3, 6)
+        return vim.pos(buf, 3, 5) <= vim.pos(buf, 3, 6)
       end)
     )
     eq(
       true,
       exec_lua(function()
-        return vim.pos(3, 5) > vim.pos(2, 5)
+        return vim.pos(buf, 3, 5) > vim.pos(buf, 2, 5)
       end)
     )
     eq(
       true,
       exec_lua(function()
-        return vim.pos(3, 5) >= vim.pos(3, 5)
+        return vim.pos(buf, 3, 5) >= vim.pos(buf, 3, 5)
       end)
     )
     eq(
       true,
       exec_lua(function()
-        return vim.pos(3, 5) == vim.pos(3, 5)
+        return vim.pos(buf, 3, 5) == vim.pos(buf, 3, 5)
       end)
     )
     eq(
       true,
       exec_lua(function()
-        return vim.pos(3, 5) ~= vim.pos(3, 6)
+        return vim.pos(buf, 3, 5) ~= vim.pos(buf, 3, 6)
       end)
     )
   end)
@@ -74,7 +78,7 @@ describe('vim.pos', function()
     end)
     insert('Neovim 是 Vim 的分支，专注于扩展性和可用性。')
     local lsp_pos = exec_lua(function()
-      local pos = vim.pos(0, 36, { buf = buf })
+      local pos = vim.pos(buf, 0, 36)
       return pos:to_lsp('utf-16')
     end)
     eq({ line = 0, character = 20 }, lsp_pos)
@@ -95,26 +99,62 @@ describe('vim.pos', function()
     insert('Some text')
     local extmark_pos = {
       exec_lua(function()
-        local pos = vim.pos(1, 0, { buf = buf })
+        local pos = vim.pos(buf, 1, 0)
         return pos:to_extmark()
       end),
     }
     eq({ 0, 9 }, extmark_pos)
     local pos = exec_lua(function()
-      return vim.pos.extmark(extmark_pos[1], extmark_pos[2], { buf = buf })
+      return vim.pos.extmark(buf, extmark_pos[1], extmark_pos[2])
     end)
     eq({ 0, 9, buf }, pos)
 
     local extmark_pos2 = {
       exec_lua(function()
-        local pos2 = vim.pos(0, 9, { buf = buf })
+        local pos2 = vim.pos(buf, 0, 9)
         return pos2:to_extmark()
       end),
     }
     eq({ 0, 9 }, extmark_pos2)
     local pos2 = exec_lua(function()
-      return vim.pos.extmark(extmark_pos2[1], extmark_pos2[2], { buf = buf })
+      return vim.pos.extmark(buf, extmark_pos2[1], extmark_pos2[2])
     end)
     eq({ 0, 9, buf }, pos2)
+  end)
+
+  it('converts between vim.Pos and buffer offset', function()
+    local buf = exec_lua(function()
+      return vim.api.nvim_get_current_buf()
+    end)
+    insert(dedent [[
+      first
+      second
+      third
+    ]])
+
+    local offsets = exec_lua(function()
+      return {
+        vim.pos(buf, 0, 0):to_offset(),
+        vim.pos(buf, 0, 3):to_offset(),
+        vim.pos(buf, 1, 0):to_offset(),
+        vim.pos(buf, 3, 0):to_offset(),
+      }
+    end)
+    eq({ 0, 3, 6, 19 }, offsets)
+
+    local positions = exec_lua(function()
+      return {
+        vim.pos.offset(buf, 0),
+        vim.pos.offset(buf, 3),
+        vim.pos.offset(buf, 6),
+        vim.pos.offset(buf, 19),
+      }
+    end)
+    eq({
+      { 0, 0, buf },
+      { 0, 3, buf },
+      { 1, 0, buf },
+      { 3, 0, buf },
+    }, positions)
   end)
 end)

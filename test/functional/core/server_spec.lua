@@ -287,7 +287,7 @@ describe('startup --listen', function()
     local cmd = vim.list_extend({ '--clean', '+qall!', '--headless' }, args)
     local r = run(cmd)
     eq(1, r.status)
-    matches(expected, r:output():gsub('\\n', ' '))
+    matches(expected, (r:output():gsub('\\n', ' ')))
 
     if is_os('win') then
       return -- On Windows, output without --headless is garbage.
@@ -296,7 +296,7 @@ describe('startup --listen', function()
     assert(not vim.tbl_contains(cmd, '--headless'))
     r = run(cmd)
     eq(1, r.status)
-    matches(expected, r:output():gsub('\\n', ' '))
+    matches(expected, (r:output():gsub('\\n', ' ')))
   end
 
   it('validates', function()
@@ -314,6 +314,15 @@ describe('startup --listen', function()
       ('nvim.*: Failed to %%-%%-listen: [^:]+ already [^:]+: "%s"'):format(vim.pesc(in_use))
     )
     _test({ '--listen', '/' }, nil, 'nvim.*: Failed to %-%-listen: [^:]+: "/"')
+    if not is_os('win') then
+      -- Too-long path is rejected, not silently truncated. #38623
+      local too_long = './Xtest-listen-' .. ('x'):rep(192)
+      _test(
+        { '--listen', too_long },
+        nil,
+        ('nvim.*: Failed to %%-%%-listen: invalid argument: "%s"'):format(vim.pesc(too_long))
+      )
+    end
     _test(
       { '--listen', 'https://example.com' },
       nil,
@@ -352,8 +361,8 @@ describe('startup --listen', function()
   end)
 end)
 
-it(':restart works in headless server (no UI)', function()
-  t.skip(is_os('win'), 'FIXME: --listen not preserved by :restart on Windows')
+it(':restart! works in headless server (no UI)', function()
+  t.skip(is_os('win'), 'FIXME: --listen not preserved by :restart! on Windows')
 
   local nvim0 = clear()
   local server_pipe = n.new_pipename()
@@ -364,18 +373,28 @@ it(':restart works in headless server (no UI)', function()
     n.set_session(nil)
   end)
 
-  fn.jobstart({ n.nvim_prog, '--clean', '--headless', '--listen', server_pipe })
+  fn.jobstart({
+    n.nvim_prog,
+    '--clean',
+    '--headless',
+    '--listen',
+    server_pipe,
+    '--cmd',
+    'let g:early_startreason = v:startreason',
+  })
   t.retry(nil, nil, function()
     neq(nil, vim.uv.fs_stat(server_pipe))
   end)
   n.set_session(n.connect(server_pipe))
 
-  n.expect_exit(n.command, 'restart')
+  n.expect_exit(n.command, 'restart!')
   n.set_session(n.connect(server_pipe))
   eq(1, api.nvim_get_vvar('vim_did_enter'))
+  eq('restart!', api.nvim_get_vvar('startreason'))
+  eq('restart!', n.eval('g:early_startreason'))
 
   -- TODO: [command] is currently not executed without UI
-  -- n.expect_exit(n.command, 'restart lua _G.new_server = 1')
+  -- n.expect_exit(n.command, 'restart! lua _G.new_server = 1')
   -- n.set_session(n.connect(server_pipe))
   -- eq(1, n.exec_lua('return _G.new_server'))
 end)

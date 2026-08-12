@@ -69,9 +69,11 @@ Lua code lives in one of four places:
      - ❌ nvim.difftool
      - ❌ nvim.tohtml
      - ❌ nvim.undotree
-2. Runtime: `runtime/lua/vim/`. Lazy-loaded modules. Examples: `treesitter`, `lpeg`.
-3. Core: `runtime/lua/vim/_core/`. Compiled-into Nvim binary, may directly
-   interact with Nvim internals. Only available in the main thread. See
+2. Stdlib: `runtime/lua/vim/`. Modules on `vim.*`, lazy-loaded (as opposed to
+   "Core" modules, see below).
+   - Examples: `vim.treesitter`, `vim.lpeg`.
+3. Core: `runtime/lua/vim/_core/`. Internal-only, compiled-in modules. May
+   directly interact with Nvim internals. Only available in main thread. See
    |dev-lua-builtin| below.
 4. "Shared" core: `runtime/lua/vim/_core/shared.lua`. Pure Lua functions which
    always are available. Used in the test runner, and worker threads/processes
@@ -123,8 +125,7 @@ internal |event-loop|.)
 
 Where possible, new editor events should be implemented using `aucmd_defer()`
 (and where possible, old events migrate to this), so they are processed in
-a predictable manner, which avoids crashes and race conditions. See
-`do_markset_autocmd` for an example.
+a predictable manner, which avoids crashes. See |dev-new-event|.
 
 ==============================================================================
 UI events                                                      *dev-ui-events*
@@ -162,6 +163,18 @@ Other references:
 - https://github.com/neovim/neovim/pull/18375
 - https://github.com/neovim/neovim/pull/21605
 
+==============================================================================
+Filesystem                                                    *dev-filesystem*
+
+https://github.com/neovim/neovim/issues/36112 Path handling, especially
+separator chars ("/" vs "\"), is designed as follows: "/" separators are used
+every except at the "edges", i.e. the separator chars are coverted
+just-in-time, and only when absolutely needed. This is similar to how UTF-8
+encoding is used internally for all text, but buffers can read/write various
+encodings.
+
+P.S. Windows handles "/" separators just fine, except in rare cases. It'll be
+fine, don't worry. Just use "/", for god's sake!
 
 ==============================================================================
 API
@@ -184,6 +197,44 @@ be "fast". For example, commit 3940c435e405 fixed such a bug with
 Common examples of non-fast code: regexp matching, wildcard expansion,
 expression evaluation.
 
+==============================================================================
+Internal practices and patterns                          *dev-internals-howto*
+
+------------------------------------------------------------------------------
+Add a new excmd or vimfn ("f_xx")  function    *dev-new-excmd* *dev-new-vimfn*
+
+To implement an Ex cmd or f_xx function, choose from one of three ways (in
+order of preference):
+
+1. Full Lua: the implementation lives in entirely in Lua. This has
+   a performance benefit: the Vimscript <=> Lua bridge is skipped when the
+   `vim.fn.xx()` function is called from Lua. Examples:
+    - `f_hostname`
+2. Partial Lua: the C implementation calls `nlua_call_vimfn` or
+   `nlua_call_excmd`. (Or in rare cases: `nlua_exec` / `NLUA_EXEC_STATIC`).
+   Examples:
+   - `ex_log`
+   - `ex_lsp`
+   - `f_serverlist`
+3. Legacy way: implement the function entirely in C.
+   Examples:
+   - `f_chansend`
+   - `f_flatten`
+   - `f_searchpos`
+
+------------------------------------------------------------------------------
+Add a new event (autocmd)                                      *dev-new-event*
+
+To add a new editor event (autocmd):
+
+1. Register the event name in `src/nvim/auevents.lua`. If the event is
+   Nvim-only (not in Vim), also update the `nvim_specific` table.
+2. Fire the event, by one of these approaches:
+   - From C, use `aucmd_defer()` to fire deferred (safe, predictable). See
+     `do_markset_autocmd` for example.
+   - From Lua, use `vim.api.nvim_exec_autocmds()`.
+3. Define the |event-data| type (if any) in `runtime/lua/vim/_meta/events.lua`.
+4. Document the event in `runtime/doc/autocmd.txt`.
 
 ==============================================================================
 The event-loop                                                    *event-loop*

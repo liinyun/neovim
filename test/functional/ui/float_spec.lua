@@ -349,12 +349,23 @@ describe('float window', function()
 
   it('opened with correct position relative to the cursor', function()
     local pos = exec_lua([[
+      local lines = {}
+      for _ = 1, 100 do lines[#lines + 1] = 'foo' end
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+      vim.api.nvim_win_set_cursor(0, { 50, 0 })
+      vim.cmd('normal! zz')
+
+      local view = vim.fn.winsaveview()
+      vim.api.nvim_win_set_cursor(0, { 1, 0 })
+      vim.fn.winrestview(view)
+
       local bufnr = vim.api.nvim_create_buf(false, true)
       local opts = { width = 10, height = 10, col = 7, row = 9, relative = 'cursor', style = 'minimal' }
       local win_id = vim.api.nvim_open_win(bufnr, false, opts)
-      return vim.api.nvim_win_get_position(win_id)
+      return { vim.api.nvim_win_get_position(win_id), vim.fn.winline() - 1 }
     ]])
-    eq({ 9, 7 }, { pos[1], pos[2] })
+    eq(pos[2] + 9, pos[1][1])
+    eq(7, pos[1][2])
   end)
 
   it('opened with correct position relative to another window', function()
@@ -1071,6 +1082,15 @@ describe('float window', function()
       ]])
       command('close')
       assert_alive()
+    end)
+
+    it('does not unload bufhidden=hide buffer', function()
+      local buf = api.nvim_create_buf(false, true)
+      command('set nohidden')
+      api.nvim_open_tabpage(0, true, {})
+      api.nvim_open_win(buf, false, { relative = 'editor', width = 1, height = 1, row = 0, col = 0 })
+      command('close!')
+      eq(true, api.nvim_buf_is_loaded(buf))
     end)
   end)
 
@@ -8924,6 +8944,8 @@ describe('float window', function()
         [32] = { foreground = Screen.colors.Blue1, blend = 100, bold = true },
         [33] = { foreground = Screen.colors.Gray0, underline = true },
         [34] = { underline = true },
+        [35] = { foreground = Screen.colors.Black, underline = true, special = Screen.colors.Red },
+        [36] = { special = Screen.colors.Red, underline = true },
       })
       insert([[
         Lorem ipsum dolor sit amet, consectetur
@@ -9283,12 +9305,12 @@ describe('float window', function()
         ]])
       end
 
-      -- winblend highlight with underline (but without guisp) in a floatwin. #14453
-      command('fclose | hi TestUnderLine gui=underline')
+      -- winblend underline: without guisp follows the fg (#14453), with guisp keeps its sp (#34614).
+      command('fclose | hi TestUnderLine gui=underline | hi TestUnderLineSp gui=underline guisp=Red')
       api.nvim_buf_add_highlight(curbufnr, -1, 'TestUnderLine', 3, 0, -1)
-      api.nvim_buf_add_highlight(curbufnr, -1, 'TestUnderLine', 4, 0, -1)
-      api.nvim_buf_set_lines(buf, 0, -1, false, {})
-      api.nvim_open_win(buf, false, { relative = 'win', row = 0, col = 0, width = 50, height = 1 })
+      api.nvim_buf_add_highlight(curbufnr, -1, 'TestUnderLineSp', 4, 0, -1)
+      api.nvim_buf_set_lines(buf, 0, -1, false, { '', '' })
+      api.nvim_open_win(buf, false, { relative = 'win', row = 0, col = 0, width = 50, height = 2 })
       if multigrid then
         screen:expect({
           grid = [[
@@ -9297,7 +9319,7 @@ describe('float window', function()
             [3:--------------------------------------------------]|
           ## grid 2
             {34:Ut enim ad minim veniam, quis nostrud}             |
-            {34:exercitation ullamco laboris nisi ut aliquip ex}   |
+            {36:exercitation ullamco laboris nisi ut aliquip ex}   |
             ea commodo consequat. Duis aute irure dolor in    |
             reprehenderit in voluptate velit esse cillum      |
             dolore eu fugiat nulla pariatur. Excepteur sint   |
@@ -9307,13 +9329,13 @@ describe('float window', function()
           ## grid 3
                                                               |
           ## grid 5
-            {17:                                                  }|
+            {17:                                                  }|*2
           ]],
           win_pos = { [2] = { height = 8, startcol = 0, startrow = 0, width = 50, win = 1000 } },
           float_pos = { [5] = { 1002, 'NW', 2, 0, 0, true, 50, 1, 0, 0 } },
           win_viewport = {
             [2] = { win = 1000, topline = 3, botline = 11, curline = 9, curcol = 0, linecount = 11, sum_scroll_delta = 3 },
-            [5] = { win = 1002, topline = 0, botline = 1, curline = 0, curcol = 0, linecount = 1, sum_scroll_delta = 0 },
+            [5] = { win = 1002, topline = 0, botline = 2, curline = 0, curcol = 0, linecount = 2, sum_scroll_delta = 0 },
           },
           win_viewport_margins = {
             [2] = { bottom = 0, left = 0, right = 0, top = 0, win = 1000 },
@@ -9323,7 +9345,7 @@ describe('float window', function()
       else
         screen:expect([[
           {33:Ut enim ad minim veniam, quis nostrud}{26:             }|
-          {34:exercitation ullamco laboris nisi ut aliquip ex}   |
+          {35:exercitation ullamco laboris nisi ut aliquip ex}{26:   }|
           ea commodo consequat. Duis aute irure dolor in    |
           reprehenderit in voluptate velit esse cillum      |
           dolore eu fugiat nulla pariatur. Excepteur sint   |
@@ -10444,6 +10466,27 @@ describe('float window', function()
       it('if closing buffer flushes UI', function()
         test_float_move_close('autocmd BufWinLeave * ++once redraw')
       end)
+    end)
+
+    it('no crash when closing a floating window from a non-current tab', function()
+      local buf = api.nvim_create_buf(false, true)
+      local win = api.nvim_open_win(buf, false, { relative = 'editor', width = 5, height = 5, row = 0, col = 0 })
+      local triggered = exec_lua(function()
+        vim.cmd.tabnew()
+        vim.api.nvim_win_call(win, vim.cmd.redraw)
+        local triggered = false
+        vim.api.nvim_create_autocmd('BufHidden', {
+          once = true,
+          buf = buf,
+          callback = function()
+            vim.api.nvim_win_call(win, vim.cmd.redraw)
+            triggered = true
+          end,
+        })
+        vim.api.nvim_win_close(win, true)
+        return triggered
+      end)
+      eq(true, triggered)
     end)
 
     it(':sleep cursor placement #22639', function()

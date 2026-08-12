@@ -69,24 +69,20 @@ end
 
 --- Create a new treesitter view.
 ---
----@param bufnr integer Source buffer number
+---@param buf integer Source buffer number
 ---@param lang string|nil Language of source buffer
 ---
 ---@return vim.treesitter.dev.TSTreeView|nil
 ---@return string|nil Error message, if any
 ---
 ---@package
-function TSTreeView:new(bufnr, lang)
-  bufnr = bufnr or 0
-  lang = lang or vim.treesitter.language.get_lang(vim.bo[bufnr].filetype)
-  local parser = vim.treesitter.get_parser(bufnr, lang)
+function TSTreeView:new(buf, lang)
+  buf = buf or 0
+  lang = lang or vim.treesitter.language.get_lang(vim.bo[buf].filetype)
+  local parser = vim.treesitter.get_parser(buf, lang)
   if not parser then
     return nil,
-      string.format(
-        'Failed to create TSTreeView for buffer %s: no parser for lang "%s"',
-        bufnr,
-        lang
-      )
+      string.format('Failed to create TSTreeView for buffer %s: no parser for lang "%s"', buf, lang)
   end
 
   -- For each child tree (injected language), find the root of the tree and locate the node within
@@ -232,10 +228,10 @@ end
 ---
 --- Calling this function computes the text that is displayed for each node.
 ---
----@param bufnr integer Buffer number to write into.
+---@param buf integer Buffer number to write into.
 ---@package
-function TSTreeView:draw(bufnr)
-  vim.bo[bufnr].modifiable = true
+function TSTreeView:draw(buf)
+  vim.bo[buf].modifiable = true
   local lines = {} ---@type string[]
   local lang_hl_marks = {} ---@type table[]
 
@@ -284,18 +280,18 @@ function TSTreeView:draw(bufnr)
     lines[i] = line
   end
 
-  api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
-  api.nvim_buf_clear_namespace(bufnr, decor_ns, 0, -1)
+  api.nvim_buf_clear_namespace(buf, decor_ns, 0, -1)
 
   for i, m in ipairs(lang_hl_marks) do
-    api.nvim_buf_set_extmark(bufnr, decor_ns, i - 1, m.col, {
+    api.nvim_buf_set_extmark(buf, decor_ns, i - 1, m.col, {
       hl_group = 'Title',
       end_col = m.end_col,
     })
   end
 
-  vim.bo[bufnr].modifiable = false
+  vim.bo[buf].modifiable = false
 end
 
 --- Get node {i} from this View.
@@ -475,7 +471,7 @@ function M.inspect_tree(opts)
 
   api.nvim_create_autocmd('CursorMoved', {
     group = group,
-    buffer = b,
+    buf = b,
     callback = function()
       if not api.nvim_buf_is_loaded(buf) then
         return true
@@ -509,7 +505,7 @@ function M.inspect_tree(opts)
 
   api.nvim_create_autocmd('CursorMoved', {
     group = group,
-    buffer = buf,
+    buf = buf,
     callback = function()
       if not api.nvim_buf_is_loaded(b) then
         return true
@@ -521,7 +517,7 @@ function M.inspect_tree(opts)
 
   api.nvim_create_autocmd({ 'TextChanged', 'InsertLeave' }, {
     group = group,
-    buffer = buf,
+    buf = buf,
     callback = function()
       if not api.nvim_buf_is_loaded(b) then
         return true
@@ -536,7 +532,7 @@ function M.inspect_tree(opts)
 
   api.nvim_create_autocmd('BufLeave', {
     group = group,
-    buffer = b,
+    buf = b,
     callback = function()
       if not api.nvim_buf_is_loaded(buf) then
         return true
@@ -547,7 +543,7 @@ function M.inspect_tree(opts)
 
   api.nvim_create_autocmd('BufLeave', {
     group = group,
-    buffer = buf,
+    buf = buf,
     callback = function()
       if not api.nvim_buf_is_loaded(b) then
         return true
@@ -558,7 +554,7 @@ function M.inspect_tree(opts)
 
   api.nvim_create_autocmd({ 'BufHidden', 'BufUnload', 'QuitPre' }, {
     group = group,
-    buffer = buf,
+    buf = buf,
     callback = function()
       -- don't close inpector window if source buffer
       -- has more than one open window
@@ -677,7 +673,7 @@ function M.edit_query(lang)
   local group = api.nvim_create_augroup('nvim.treesitter.dev_edit', {})
   api.nvim_create_autocmd({ 'TextChanged', 'InsertLeave' }, {
     group = group,
-    buffer = query_buf,
+    buf = query_buf,
     desc = 'Update query editor diagnostics when the query changes',
     callback = function()
       vim.treesitter.query.lint(query_buf, { langs = lang, clear = false })
@@ -685,7 +681,7 @@ function M.edit_query(lang)
   })
   api.nvim_create_autocmd({ 'TextChanged', 'InsertLeave', 'CursorMoved', 'BufEnter' }, {
     group = group,
-    buffer = query_buf,
+    buf = query_buf,
     desc = 'Update query editor highlights when the cursor moves',
     callback = function()
       if api.nvim_win_is_valid(win) then
@@ -695,7 +691,7 @@ function M.edit_query(lang)
   })
   api.nvim_create_autocmd('BufLeave', {
     group = group,
-    buffer = query_buf,
+    buf = query_buf,
     desc = 'Clear highlights when leaving the query editor',
     callback = function()
       api.nvim_buf_clear_namespace(buf, edit_ns, 0, -1)
@@ -703,7 +699,7 @@ function M.edit_query(lang)
   })
   api.nvim_create_autocmd('BufLeave', {
     group = group,
-    buffer = buf,
+    buf = buf,
     desc = 'Clear the query editor highlights when leaving the source buffer',
     callback = function()
       if not api.nvim_buf_is_loaded(query_buf) then
@@ -715,7 +711,7 @@ function M.edit_query(lang)
   })
   api.nvim_create_autocmd({ 'BufHidden', 'BufUnload' }, {
     group = group,
-    buffer = buf,
+    buf = buf,
     desc = 'Close the editor window when the source buffer is hidden or unloaded',
     once = true,
     callback = function()

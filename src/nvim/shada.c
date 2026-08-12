@@ -1180,7 +1180,7 @@ static void shada_read(FileDescriptor *const sd_reader, const int flags)
       }
       const fmark_T fm = (fmark_T) {
         .mark = cur_entry.data.filemark.mark,
-        .fnum = 0,
+        .fnum = buf->b_fnum,
         .timestamp = cur_entry.timestamp,
         .view = INIT_FMARKV,
         .additional_data = cur_entry.additional_data,
@@ -1772,11 +1772,18 @@ static inline ShaDaWriteResult shada_read_when_writing(FileDescriptor *const sd_
       ret = shada_pack_entry(packer, entry, 0);
       shada_free_shada_entry(&entry);
       break;
-    case kSDItemSearchPattern:
-      COMPARE_WITH_ENTRY((entry.data.search_pattern.is_substitute_pattern
-                          ? &wms->sub_search_pattern
-                          : &wms->search_pattern), entry);
+    case kSDItemSearchPattern: {
+      const bool is_sub = entry.data.search_pattern.is_substitute_pattern;
+      ShadaEntry *const wms_pat = is_sub ? &wms->sub_search_pattern : &wms->search_pattern;
+      if (wms_pat->type == kSDItemMissing
+          && search_pattern_cleared(is_sub)
+          && get_search_pattern_timestamp(is_sub) >= entry.timestamp) {
+        shada_free_shada_entry(&entry);
+        break;
+      }
+      COMPARE_WITH_ENTRY(wms_pat, entry);
       break;
+    }
     case kSDItemSubString:
       COMPARE_WITH_ENTRY(&wms->replacement, entry);
       break;
@@ -1798,6 +1805,13 @@ static inline ShaDaWriteResult shada_read_when_writing(FileDescriptor *const sd_
         ret = shada_pack_entry(packer, entry, 0);
         shada_free_shada_entry(&entry);
         break;
+      }
+      if (wms->registers[idx].type == kSDItemMissing) {
+        const yankreg_T *const reg = op_reg_get(entry.data.reg.name);
+        if (reg != NULL && reg_empty(reg) && reg->timestamp >= entry.timestamp) {
+          shada_free_shada_entry(&entry);
+          break;
+        }
       }
       COMPARE_WITH_ENTRY(&wms->registers[idx], entry);
       break;
@@ -1991,8 +2005,8 @@ static inline ShaDaWriteResult shada_read_when_writing(FileDescriptor *const sd_
 static inline bool ignore_buf(const buf_T *const buf, Set(ptr_t) *const removable_bufs)
   FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_ALWAYS_INLINE
 {
-  return (buf == NULL || buf->b_ffname == NULL || !buf->b_p_bl || bt_quickfix(buf) \
-          || bt_terminal(buf) || set_has(ptr_t, removable_bufs, (ptr_t)buf));
+  return (buf == NULL || buf->b_ffname == NULL || (!buf->b_p_bl && buf->b_p_initialized)
+          || bt_quickfix(buf) || bt_terminal(buf) || set_has(ptr_t, removable_bufs, (ptr_t)buf));
 }
 
 /// Get list of buffers to write to the shada file
@@ -2006,7 +2020,7 @@ static inline ShadaEntry shada_get_buflist(Set(ptr_t) *const removable_bufs)
   int max_bufs = get_shada_parameter('%');
   size_t buf_count = 0;
   FOR_ALL_BUFFERS(buf) {
-    if (!ignore_buf(buf, removable_bufs)
+    if (!ignore_buf(buf, removable_bufs) && buf->b_p_bl
         && (max_bufs < 0 || buf_count < (size_t)max_bufs)) {
       buf_count++;
     }
@@ -2025,7 +2039,7 @@ static inline ShadaEntry shada_get_buflist(Set(ptr_t) *const removable_bufs)
   };
   size_t i = 0;
   FOR_ALL_BUFFERS(buf) {
-    if (ignore_buf(buf, removable_bufs)) {
+    if (ignore_buf(buf, removable_bufs) || !buf->b_p_bl) {
       continue;
     }
     if (i >= buf_count) {

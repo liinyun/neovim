@@ -9,6 +9,7 @@
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/ascii_defs.h"
+#include "nvim/autocmd.h"
 #include "nvim/buffer.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
@@ -18,6 +19,7 @@
 #include "nvim/eval.h"
 #include "nvim/eval/typval_defs.h"
 #include "nvim/eval/vars.h"
+#include "nvim/eval_defs.h"
 #include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
 #include "nvim/grid.h"
@@ -440,7 +442,8 @@ void win_redr_winbar(win_T *wp)
 void redraw_ruler(void)
 {
   static int did_ruler_col = -1;
-  win_T *wp = curwin->w_status_height == 0 ? curwin : lastwin_nofloating(NULL);
+  win_T *wp = !is_aucmd_win(curwin)
+              && curwin->w_status_height == 0 ? curwin : lastwin_nofloating(NULL);
   bool is_stl_global = global_stl_height() > 0;
 
   // Check if ruler should be drawn, clear if it was drawn before.
@@ -479,7 +482,7 @@ void redraw_ruler(void)
   int off = wp->w_status_height ? wp->w_wincol : 0;
   int width = wp->w_status_height ? wp->w_width : Columns;
   schar_T fillchar = part_of_status ? fillchar_status(&group, wp) : schar_from_ascii(' ');
-  int attr = win_hl_attr(wp, (int)group);
+  int attr = part_of_status ? win_hl_attr(wp, (int)group) : HL_ATTR(group);
 
   // In list mode virtcol needs to be recomputed
   colnr_T virtcol = wp->w_virtcol;
@@ -1116,16 +1119,19 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
         }
       }
 
+      int minwid = stl_items[stl_groupitems[groupdepth]].minwid;
+
       // If the group is longer than it is allowed to be truncate by removing
       // bytes from the start of the group text. Don't truncate when item is a
       // 'statuscolumn' fold item to ensure correctness of the mouse clicks.
       if (group_len > stl_items[stl_groupitems[groupdepth]].maxwid
           && stl_items[stl_groupitems[groupdepth]].type != HighlightFold) {
         // { Determine the number of bytes to remove
+        int maxwid = stl_items[stl_groupitems[groupdepth]].maxwid;
 
         // Find the first character that should be included.
         int n = 0;
-        while (group_len >= stl_items[stl_groupitems[groupdepth]].maxwid) {
+        while (group_len >= maxwid) {
           group_len -= ptr2cells(t + n);
           n += utfc_ptr2len(t + n);
         }
@@ -1138,7 +1144,8 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
         memmove(t + 1, t + n, (size_t)(out_p - (t + n)));
         out_p = out_p - n + 1;
         // Fill up space left over by half a double-wide char.
-        while (++group_len < stl_items[stl_groupitems[groupdepth]].minwid) {
+        minwid = MIN(minwid, maxwid);
+        while (++group_len < minwid) {
           schar_get_adv(&out_p, fillchar);
         }
         // }
@@ -1154,33 +1161,36 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
           stl_items[idx].start = MAX(stl_items[idx].start, t);
         }
         // If the group is shorter than the minimum width, add padding characters.
-      } else if (abs(stl_items[stl_groupitems[groupdepth]].minwid) > group_len) {
-        ptrdiff_t min_group_width = stl_items[stl_groupitems[groupdepth]].minwid;
+      } else if (abs(minwid) > group_len) {
+        ptrdiff_t fillchar_bytes = (ptrdiff_t)schar_len(fillchar);
         // If the group is left-aligned, add characters to the right.
-        if (min_group_width < 0) {
-          min_group_width = 0 - min_group_width;
-          while (group_len++ < min_group_width && out_p < out_end_p) {
+        if (minwid < 0) {
+          minwid = 0 - minwid;
+          while (group_len++ < minwid && out_p + fillchar_bytes <= out_end_p) {
             schar_get_adv(&out_p, fillchar);
           }
           // If the group is right-aligned, shift everything to the right and
           // prepend with filler characters.
         } else {
-          // { Move the group to the right
-          group_len = (min_group_width - group_len) * (int)schar_len(fillchar);
-          memmove(t + group_len, t, (size_t)(out_p - t));
-          if (out_p + group_len >= (out_end_p + 1)) {
-            group_len = out_end_p - out_p;
+          ptrdiff_t added_cells = minwid - group_len;
+          ptrdiff_t added_bytes = added_cells * fillchar_bytes;
+          if (out_p + added_bytes > out_end_p) {
+            added_cells = (out_end_p - out_p) / fillchar_bytes;
+            added_bytes = added_cells * fillchar_bytes;
           }
-          out_p += group_len;
+
+          // { Move the group to the right
+          memmove(t + added_bytes, t, (size_t)(out_p - t));
+          out_p += added_bytes;
           // }
 
           // Adjust item start positions
           for (int n = stl_groupitems[groupdepth] + 1; n < curitem; n++) {
-            stl_items[n].start += group_len;
+            stl_items[n].start += added_bytes;
           }
 
           // Prepend the fill characters
-          for (; group_len > 0; group_len--) {
+          for (; added_cells > 0; added_cells--) {
             schar_get_adv(&t, fillchar);
           }
         }
@@ -1375,7 +1385,7 @@ int build_stl_str_hl(win_T *wp, char *out, size_t outlen, char *fmt, OptIndex op
         break;
       }
       fmt_p++;
-      if (reevaluate) {
+      if (reevaluate && out_p > out) {
         out_p[-1] = NUL;  // remove the % at the end of %{% expr %}
       } else {
         *out_p = NUL;
@@ -1593,7 +1603,8 @@ stcsign:
 
       if (fdc > 0) {
         schar_T fold_buf[9];
-        fill_foldcolumn(wp, stcp->foldinfo, lnum, 0, fdc, NULL, stcp->fold_vcol, fold_buf);
+        fill_foldcolumn(wp, stcp->foldinfo, stcp->lnum, 0, fdc, get_vim_var_nr(VV_VIRTNUM) < 0,
+                        NULL, stcp->fold_vcol, fold_buf);
         stl_items[curitem].minwid = -(use_cursor_line_highlight(wp, lnum) ? HLF_CLF : HLF_FC);
         size_t buflen = 0;
         // TODO(bfredl): this is very backwards. we must support schar_T

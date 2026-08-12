@@ -10,40 +10,38 @@ local insert = n.insert
 describe('vim.range', function()
   before_each(clear)
 
-  it('creates a range with or without optional fields', function()
-    local range = exec_lua(function()
-      return vim.range(3, 5, 4, 6)
+  it('creates a range', function()
+    local range, buf = exec_lua(function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      return vim.range(buf, 3, 5, 4, 6), buf
     end)
     eq(3, range[1])
     eq(5, range[2])
     eq(4, range[3])
     eq(6, range[4])
-    eq(nil, range[5])
-    local buf = exec_lua(function()
-      return vim.api.nvim_create_buf(false, true)
-    end)
-    range = exec_lua(function()
-      return vim.range(3, 5, 4, 6, { buf = buf })
-    end)
     eq(buf, range[5])
   end)
 
-  it('creates a range from two positions when optional fields are not matched', function()
-    local range = exec_lua(function()
-      return vim.range(vim.pos(3, 5), vim.pos(4, 6))
+  it('creates a range with buf=0', function()
+    local range, buf = exec_lua(function()
+      return vim.range(0, 3, 5, 4, 6), vim.api.nvim_get_current_buf()
     end)
     eq(3, range[1])
     eq(5, range[2])
     eq(4, range[3])
     eq(6, range[4])
-    eq(nil, range[5])
+    eq(buf, range[5])
+  end)
 
-    local buf1 = exec_lua(function()
-      return vim.api.nvim_create_buf(false, true)
+  it('creates a range from two positions', function()
+    local range, buf1 = exec_lua(function()
+      local buf = vim.api.nvim_create_buf(false, true)
+      return vim.range(vim.pos(buf, 3, 5), vim.pos(buf, 4, 6)), buf
     end)
-    range = exec_lua(function()
-      return vim.range(vim.pos(3, 5, { buf = buf1 }), vim.pos(4, 6, { buf = buf1 }))
-    end)
+    eq(3, range[1])
+    eq(5, range[2])
+    eq(4, range[3])
+    eq(6, range[4])
     eq(buf1, range[5])
 
     local buf2 = exec_lua(function()
@@ -51,7 +49,7 @@ describe('vim.range', function()
     end)
     local success = exec_lua(function()
       return pcall(function()
-        return vim.range(vim.pos(3, 5, { buf = buf1 }), vim.pos(4, 6, { buf = buf2 }))
+        return vim.range(vim.pos(buf1, 3, 5), vim.pos(buf2, 4, 6))
       end)
     end)
     eq(success, false)
@@ -63,7 +61,7 @@ describe('vim.range', function()
     end)
     insert('Neovim 是 Vim 的分支，专注于扩展性和可用性。')
     local lsp_range = exec_lua(function()
-      local range = vim.range(0, 10, 0, 36, { buf = buf })
+      local range = vim.range(buf, 0, 10, 0, 36)
       return range:to_lsp('utf-16')
     end)
     eq({
@@ -86,16 +84,98 @@ describe('vim.range', function()
     eq(
       true,
       exec_lua(function()
-        return vim.range(0, 0, 1, 5):has(vim.pos(0, 1))
+        local buf = vim.api.nvim_create_buf(false, true)
+        return vim.range(buf, 0, 0, 1, 5):has(vim.pos(buf, 0, 1))
       end)
     )
   end)
 
-  it('checks whether a range does not contain an empty range just outside it', function()
+  it('a range does not contain an empty range just outside it', function()
     eq(
       false,
       exec_lua(function()
-        return vim.range(0, 0, 0, 4):has(vim.range(0, 0, 0, 0))
+        return vim.range(0, 0, 0, 0, 4):has(vim.range(0, 0, 0, 0, 0))
+      end)
+    )
+
+    eq(
+      false,
+      exec_lua(function()
+        return vim.range(0, 0, 0, 0, 4):has(vim.range(0, 0, 4, 0, 4))
+      end)
+    )
+  end)
+
+  it('an empty range contains no other range', function()
+    eq(
+      false,
+      exec_lua(function()
+        return vim.range(0, 1, 0, 1, 0):has(vim.range(0, 1, 0, 1, 0))
+      end)
+    )
+    eq(
+      false,
+      exec_lua(function()
+        return vim.range(0, 1, 0, 1, 0):has(vim.range(0, 1, 0, 2, 0))
+      end)
+    )
+    eq(
+      false,
+      exec_lua(function()
+        return vim.range(0, 1, 0, 1, 0):has(vim.range(0, 0, 0, 1, 0))
+      end)
+    )
+  end)
+
+  it('an empty range intersercts with no other range', function()
+    eq(
+      nil,
+      exec_lua(function()
+        return vim.range(0, 1, 0, 1, 0):intersect(vim.range(0, 1, 0, 1, 0))
+      end)
+    )
+    eq(
+      nil,
+      exec_lua(function()
+        return vim.range(0, 1, 0, 1, 0):intersect(vim.range(0, 1, 0, 2, 0))
+      end)
+    )
+    eq(
+      nil,
+      exec_lua(function()
+        return vim.range(0, 1, 0, 1, 0):intersect(vim.range(0, 0, 0, 1, 0))
+      end)
+    )
+  end)
+
+  it('empty range comparison semantics', function()
+    eq(
+      true,
+      exec_lua(function()
+        return vim.range(0, 0, 0, 0, 0) < vim.range(0, 0, 0, 0, 1)
+      end)
+    )
+
+    eq(
+      true,
+      exec_lua(function()
+        return vim.range(0, 1, 0, 1, 0) < vim.range(0, 1, 0, 1, 1)
+      end)
+    )
+
+    eq(
+      true,
+      exec_lua(function()
+        return vim.range(0, 1, 1, 1, 1) > vim.range(0, 1, 0, 1, 1)
+      end)
+    )
+  end)
+
+  it('1 byte wide range is not empty', function()
+    eq(
+      false,
+      exec_lua(function()
+        return vim.range(0, 1, 0, 1, 1):is_empty()
       end)
     )
   end)

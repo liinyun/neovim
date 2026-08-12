@@ -1011,7 +1011,8 @@ theend:
   char *p = ccline.cmdbuff;
 
   if (ui_has(kUICmdline)) {
-    if (exmode_active) {
+    // Emit cmdline_block in Ex mode unless cmdbuff is NULL (happens with <C-\><C-N> #39021).
+    if (exmode_active && p != NULL) {
       ui_ext_cmdline_block_append(0, p);
     }
     ui_ext_cmdline_hide(s->gotesc);
@@ -1290,7 +1291,7 @@ static int command_line_execute(VimState *state, int key)
     return -1;  // get another key
   }
 
-  disptick_T display_tick_saved = display_tick;
+  disptick_T display_tick_saved = curwin->w_display_tick;
   CommandLineState *s = (CommandLineState *)state;
   s->c = key;
 
@@ -1321,8 +1322,12 @@ static int command_line_execute(VimState *state, int key)
       init_incsearch_state(&s->is_state);
     }
     // Re-apply 'incsearch' highlighting in case it was cleared.
-    if (display_tick > display_tick_saved && s->is_state.did_incsearch) {
+    if (curwin->w_display_tick > display_tick_saved && s->is_state.did_incsearch) {
       may_do_incsearch_highlighting(s->firstc, s->count, &s->is_state);
+    }
+    // If f_setcmdline() changed the cmdline treat it as such.
+    if (ccline.cmdbuff_replaced) {
+      command_line_changed(s);
     }
 
     // nvim_select_popupmenu_item() can be called from the handling of
@@ -2893,8 +2898,9 @@ static int command_line_changed(CommandLineState *s)
     }
   }
 
-  if (ccline.cmdpos != s->prev_cmdpos
-      || (s->prev_cmdbuff != NULL && strcmp(s->prev_cmdbuff, ccline.cmdbuff) != 0)) {
+  if (!ccline.cmdbuff_replaced
+      && (ccline.cmdpos != s->prev_cmdpos
+          || (s->prev_cmdbuff != NULL && strcmp(s->prev_cmdbuff, ccline.cmdbuff) != 0))) {
     // Trigger CmdlineChanged autocommands.
     do_autocmd_cmdlinechanged(s->firstc > 0 ? s->firstc : '-');
   }
@@ -4063,7 +4069,7 @@ void redrawcmd(void)
   // Typing ':' at the more prompt may set skip_redraw.  We don't want this
   // in cmdline mode.
   skip_redraw = false;
-
+  cmdline_was_last_drawn = true;
   redrawing_cmdline = false;
 }
 
@@ -4152,7 +4158,10 @@ char *vim_strsave_fnameescape(const char *const fname, const int what)
 {
 #ifdef BACKSLASH_IN_FILENAME
 # define PATH_ESC_CHARS " \t\n*?[{`%#'\"|!<"
-# define BUFFER_ESC_CHARS (" \t\n*?[`%#'\"|!<")
+// '%' and '#' are not escaped for ":buffer": it has no EX_XFILE, so they are
+// not expanded, and escaping them as "\%"/"\#" breaks buffer name matching
+// when '%'/'#' is in 'isfname' (backslash treated as a path separator).
+# define BUFFER_ESC_CHARS (" \t\n*?[`'\"|!<")
   char buf[sizeof(PATH_ESC_CHARS)];
   int j = 0;
 

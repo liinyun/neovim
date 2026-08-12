@@ -36,6 +36,7 @@ local M = {}
 local api = vim.api
 local lsp = vim.lsp
 local protocol = lsp.protocol
+local isnil = require('vim._core.util').isnil
 
 local rtt_ms = 50.0
 local ns_to_ms = 0.000001
@@ -747,9 +748,21 @@ function CompletionResolver:request(bufnr, param, selected_word)
         return
       end
 
-      local value = vim.tbl_get(result, 'documentation', 'value')
+      local value = vim.tbl_get(result, 'documentation', 'value') --[[@as string?]]
       local kind = vim.tbl_get(result, 'documentation', 'kind')
       local text_format = vim.tbl_get(result, 'insertTextFormat')
+
+      if result.detail and result.detail ~= '' then
+        if not value then
+          value = ('```%s\n%s\n```'):format(vim.bo.filetype, result.detail)
+          kind = kind or lsp.protocol.MarkupKind.Markdown
+        elseif not value:find(result.detail, 1, true) then
+          local detail_block = ('```%s\n%s\n```'):format(vim.bo.filetype, result.detail)
+          value = detail_block .. '\n' .. value
+          kind = kind or lsp.protocol.MarkupKind.Markdown
+        end
+      end
+
       if not value then
         if text_format ~= protocol.InsertTextFormat.Snippet then
           return
@@ -774,7 +787,7 @@ end
 local function on_completechanged(group, bufnr)
   api.nvim_create_autocmd('CompleteChanged', {
     group = group,
-    buffer = bufnr,
+    buf = bufnr,
     callback = function(ev)
       local completed_item = vim.v.event.completed_item or {}
       local lsp_item = vim.tbl_get(completed_item, 'user_data', 'nvim', 'lsp', 'completion_item')
@@ -920,13 +933,13 @@ end
 ---@return integer
 local function register_completedone(bufnr)
   local group = api.nvim_create_augroup(get_augroup(bufnr), { clear = false })
-  if #api.nvim_get_autocmds({ buffer = bufnr, event = 'CompleteDone', group = group }) > 0 then
+  if #api.nvim_get_autocmds({ buf = bufnr, event = 'CompleteDone', group = group }) > 0 then
     return group
   end
 
   api.nvim_create_autocmd('CompleteDone', {
     group = group,
-    buffer = bufnr,
+    buf = bufnr,
     callback = function()
       local reason = api.nvim_get_vvar('event').reason ---@type string
       if reason == 'accept' then
@@ -991,7 +1004,13 @@ local function trigger(bufnr, clients, ctx)
       end
 
       local result = response.result
-      if result and #(result.items or result) > 0 then
+      if type(result) == 'table' and result.items == vim.NIL then
+        error(
+          ('%s: completion response has items=null, expected CompletionItem[]'):format(
+            client and client.name or 'UNKNOWN'
+          )
+        )
+      elseif not isnil(result) and #(result.items or result) > 0 then
         Context.isIncomplete = Context.isIncomplete or result.isIncomplete
         local encoding = client and client.offset_encoding or 'utf-16'
         local client_matches, tmp_server_start_boundary
@@ -1033,9 +1052,7 @@ local function trigger(bufnr, clients, ctx)
     Context.cursor = { cursor_row, start_col }
     if #matches > 0 and has_completeopt('popup') then
       local group = get_augroup(bufnr)
-      if
-        #api.nvim_get_autocmds({ buffer = bufnr, event = 'CompleteChanged', group = group }) == 0
-      then
+      if #api.nvim_get_autocmds({ buf = bufnr, event = 'CompleteChanged', group = group }) == 0 then
         on_completechanged(group, bufnr)
       end
     end
@@ -1148,7 +1165,7 @@ local function enable_completions(client_id, bufnr, opts)
     local group = register_completedone(bufnr)
     api.nvim_create_autocmd('LspDetach', {
       group = group,
-      buffer = bufnr,
+      buf = bufnr,
       desc = 'vim.lsp.completion: clean up client on detach',
       callback = function(ev)
         disable_completions(ev.data.client_id, ev.buf)
@@ -1158,14 +1175,14 @@ local function enable_completions(client_id, bufnr, opts)
     if opts.autotrigger then
       api.nvim_create_autocmd('InsertCharPre', {
         group = group,
-        buffer = bufnr,
+        buf = bufnr,
         callback = function()
           on_insert_char_pre(buf_handles[bufnr])
         end,
       })
       api.nvim_create_autocmd('InsertLeave', {
         group = group,
-        buffer = bufnr,
+        buf = bufnr,
         callback = on_insert_leave,
       })
     end

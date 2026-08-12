@@ -204,6 +204,7 @@ void win_config_float(win_T *wp, WinConfig fconfig)
   wp->w_height = MAX(fconfig.height, 1);
 
   if (fconfig.relative == kFloatRelativeCursor) {
+    validate_cursor(curwin);
     fconfig.relative = kFloatRelativeWindow;
     fconfig.row += curwin->w_wrow;
     fconfig.col += curwin->w_wcol;
@@ -401,7 +402,7 @@ win_T *win_float_find_altwin(const win_T *win, const tabpage_T *tp)
 
   assert(tp != curtab);
   wp = tabpage_win_valid(tp, tp->tp_prevwin) ? tp->tp_prevwin : tp->tp_firstwin;
-  return (wp->w_config.focusable && !wp->w_config.hide) ? wp : tp->tp_firstwin;
+  return (wp != win && wp->w_config.focusable && !wp->w_config.hide) ? wp : tp->tp_firstwin;
 }
 
 /// Inline helper function for handling errors and cleanup in win_float_create_preview.
