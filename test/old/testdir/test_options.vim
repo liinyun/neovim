@@ -863,9 +863,6 @@ func Test_set_option_errors()
   call assert_fails('set commentstring=x', 'E537:')
   call assert_fails('let &commentstring = "x"', 'E537:')
   call assert_fails('set complete=x', 'E539:')
-  call assert_fails('set rulerformat=%-', 'E539:')
-  call assert_fails('set rulerformat=%(', 'E542:')
-  call assert_fails('set rulerformat=%15(%%', 'E542:')
 
   " Test for 'statusline' errors
   call assert_fails('set statusline=%^', 'E539:')  " Nvim: supports %$
@@ -882,6 +879,11 @@ func Test_set_option_errors()
   call assert_fails('set tabline=%{%}', 'E539:')
   call assert_fails('set tabline=%(', 'E542:')
   call assert_fails('set tabline=%)', 'E542:')
+
+  " Test for 'rulerformat' errors
+  call assert_fails('set rulerformat=%-', 'E539:')
+  call assert_fails('set rulerformat=%(', 'E542:')
+  call assert_fails('set rulerformat=%15(%%', 'E542:')
 
   if has('cursorshape')
     " This invalid value for 'guicursor' used to cause Vim to crash.
@@ -1153,9 +1155,9 @@ func Test_backupskip()
       call writefile(['errors:'] + v:errors, 'Xtestout')
       qall
   [CODE]
-  call writefile(after, 'Xafter')
-  " let cmd = GetVimProg() . ' --not-a-term -S Xafter --cmd "set enc=utf8"'
-  let cmd = GetVimProg() . ' -S Xafter --cmd "set enc=utf8"'
+  call writefile(after, 'Xafter', 'D')
+  " let cmd = GetVimProg() . ' --clean --not-a-term -S Xafter --cmd "set enc=utf8"'
+  let cmd = GetVimProg() . ' --clean -S Xafter --cmd "set enc=utf8"'
 
   let saveenv = {}
   for var in ['TMPDIR', 'TMP', 'TEMP']
@@ -1163,9 +1165,9 @@ func Test_backupskip()
     call setenv(var, '/duplicate/path')
   endfor
 
-  " unset $HOME, so that it won't try to read init files
+  " set $HOME='', so that Vim won't try to read init files
   let saveenv['HOME'] = getenv("HOME")
-  call setenv('HOME', v:null)
+  call setenv('HOME', '')
   exe 'silent !' . cmd
   call assert_equal(['errors:'], readfile('Xtestout'))
 
@@ -1175,7 +1177,6 @@ func Test_backupskip()
   endfor
 
   call delete('Xtestout')
-  call delete('Xafter')
 
   " Duplicates should be filtered out (option has P_NODUP)
   let backupskip = &backupskip
@@ -2588,6 +2589,8 @@ func Test_string_option_revert_on_failure()
         \ ['selection', 'exclusive', 'a123'],
         \ ['selectmode', 'cmd', 'a123'],
         \ ['sessionoptions', 'options', 'a123'],
+        \ ['shellpipe', '>%s', "%s%s%s"],
+        \ ['shellredir', '>%s', "%s%s%s"],
         \ ['shortmess', 'w', '2'],
         \ ['showbreak', '>>', "\x01"],
         \ ['showcmdloc', 'statusline', 'a123'],

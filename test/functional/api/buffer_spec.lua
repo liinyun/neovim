@@ -959,6 +959,10 @@ describe('api/buf', function()
       eq('hello foo!', curbuf_depr('get_line', 0))
       -- cursor should be moved left by two columns (replacement is shorter by 2 chars)
       eq({ 1, 9 }, api.nvim_win_get_cursor(0))
+
+      -- changelist entry reflects the edit column #28618
+      local changes = fn.getchangelist()[1]
+      eq(6, changes[#changes].col)
     end)
 
     it('updates the cursor position in non-current window', function()
@@ -1003,6 +1007,110 @@ describe('api/buf', function()
       -- both cursors should be moved left by two columns (replacement is shorter by 2 chars)
       eq({ 1, 9 }, api.nvim_win_get_cursor(win))
       eq({ 1, 4 }, api.nvim_win_get_cursor(win2))
+    end)
+
+    it('keep visual select position #29558', function()
+      insert([[1234]])
+      api.nvim_win_set_cursor(0, { 1, 1 })
+      feed('vl')
+      exec_lua([[
+        vim.defer_fn(function() vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '0' }) end, 50)
+        vim.wait(80)
+      ]])
+      local mode = api.nvim_get_mode().mode
+      eq({ '23' }, fn.getregion(fn.getpos('.'), fn.getpos('v'), { type = mode }))
+      eq({ 'v', { '01234' } }, { mode, api.nvim_buf_get_lines(0, 0, -1, false) })
+      feed('<ESC>')
+
+      api.nvim_buf_set_lines(0, 0, -1, false, { '1', '2', '3' })
+      api.nvim_win_set_cursor(0, { 2, 0 })
+      feed('v')
+      exec_lua([[
+        vim.defer_fn(function() vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '0', '' }) end, 50)
+        vim.wait(80)
+      ]])
+      mode = api.nvim_get_mode().mode
+      eq({ '2' }, fn.getregion(fn.getpos('.'), fn.getpos('v'), { type = mode }))
+      eq({ 'v', { '0', '1', '2', '3' } }, { mode, api.nvim_buf_get_lines(0, 0, -1, false) })
+      feed('<ESC>')
+
+      api.nvim_buf_set_lines(0, 0, -1, false, { '1', '2' })
+      api.nvim_win_set_cursor(0, { 1, 0 })
+      feed('vj')
+      exec_lua([[
+        vim.defer_fn(function() vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '0' }) end, 50)
+        vim.wait(80)
+      ]])
+      mode = api.nvim_get_mode().mode
+      eq({ '1', '2' }, fn.getregion(fn.getpos('.'), fn.getpos('v'), { type = mode }))
+      eq({ 'v', { '01', '2' } }, { mode, api.nvim_buf_get_lines(0, 0, -1, false) })
+      feed('<ESC>')
+
+      api.nvim_buf_set_lines(0, 0, -1, false, { '123' })
+      api.nvim_win_set_cursor(0, { 1, 1 })
+      feed('v')
+      exec_lua([[
+        vim.defer_fn(function() vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '', '' }) end, 50)
+        vim.wait(80)
+      ]])
+      mode = api.nvim_get_mode().mode
+      eq({ '2' }, fn.getregion(fn.getpos('.'), fn.getpos('v'), { type = mode }))
+      eq({ 'v', { '', '123' } }, { mode, api.nvim_buf_get_lines(0, 0, -1, false) })
+      feed('<ESC>')
+
+      -- Visual block mode
+      api.nvim_buf_set_lines(0, 0, -1, false, { '123', '456' })
+      api.nvim_win_set_cursor(0, { 1, 0 })
+      feed('<C-v>jl')
+      exec_lua([[
+        vim.defer_fn(function() vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '0' }) end, 50)
+        vim.wait(80)
+      ]])
+      mode = api.nvim_get_mode().mode
+      eq({ '01', '45' }, fn.getregion(fn.getpos('.'), fn.getpos('v'), { type = mode }))
+      eq(
+        { string.char(0x16), { '0123', '456' } },
+        { mode, api.nvim_buf_get_lines(0, 0, -1, false) }
+      )
+      feed('<ESC>')
+      -- also test nvim_buf_set_lines inserts line above visual selection
+      api.nvim_buf_set_lines(0, 0, -1, false, { '1', '2', '3' })
+      api.nvim_win_set_cursor(0, { 2, 0 })
+      feed('v')
+      exec_lua([[
+        vim.defer_fn(function() vim.api.nvim_buf_set_lines(0, 0, 0, false, { 'new' }) end, 50)
+        vim.wait(80)
+      ]])
+      mode = api.nvim_get_mode().mode
+      eq({ '2' }, fn.getregion(fn.getpos('.'), fn.getpos('v'), { type = mode }))
+      eq({ 'v', { 'new', '1', '2', '3' } }, { mode, api.nvim_buf_get_lines(0, 0, -1, false) })
+      feed('<ESC>')
+
+      api.nvim_buf_set_lines(0, 0, -1, false, { '1234' })
+      api.nvim_win_set_cursor(0, { 1, 1 })
+      feed('vl')
+      exec_lua([[
+        vim.defer_fn(function()
+          vim.api.nvim_buf_set_text(0, 0, 0, 0, 0, { '0', 'foo' })
+        end, 50)
+        vim.wait(80)
+      ]])
+      mode = api.nvim_get_mode().mode
+      eq({ '23' }, fn.getregion(fn.getpos('.'), fn.getpos('v'), { type = mode }))
+      eq({ 'v', { '0', 'foo1234' } }, { mode, api.nvim_buf_get_lines(0, 0, -1, false) })
+      feed('<ESC>')
+
+      api.nvim_buf_set_lines(0, 0, -1, false, { '1', '2', '3', '4', '5', '6', '7', '8', '9', '10' })
+      api.nvim_win_set_cursor(0, { 8, 0 })
+      feed('v')
+      exec_lua([[
+        vim.defer_fn(function() vim.api.nvim_buf_set_lines(0, 0, 5, false, {}) end, 50)
+        vim.wait(80)
+      ]])
+      mode = api.nvim_get_mode().mode
+      eq({ '8' }, fn.getregion(fn.getpos('.'), fn.getpos('v'), { type = mode }))
+      eq({ 'v', { '6', '7', '8', '9', '10' } }, { mode, api.nvim_buf_get_lines(0, 0, -1, false) })
+      feed('<ESC>')
     end)
 
     describe('when text is being added right at cursor position #22526', function()
@@ -2352,6 +2460,20 @@ describe('api/buf', function()
       api.nvim_buf_delete(b, { unload = true })
       ok(not api.nvim_buf_is_loaded(b))
       ok(api.nvim_buf_is_valid(b))
+    end)
+
+    it('does not crash if WinClosed closes the next tabpage #40852', function()
+      exec_lua(function()
+        vim.cmd.tabnew()
+        vim.api.nvim_create_autocmd('WinClosed', {
+          callback = function()
+            pcall(vim.api.nvim_win_close, 0, true)
+          end,
+        })
+        local bufs = vim.api.nvim_list_bufs()
+        vim.api.nvim_buf_delete(bufs[#bufs - 1], { force = true })
+      end)
+      assert_alive()
     end)
   end)
 

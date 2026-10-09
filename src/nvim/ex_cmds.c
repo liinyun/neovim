@@ -2117,6 +2117,7 @@ void do_wqall(exarg_T *eap)
         && channel_job_running((uint64_t)buf->b_p_channel)) {
       no_write_message_buf(buf);
       error++;
+      continue;
     } else if (!bufIsChanged(buf) || bt_dontwrite(buf)) {
       continue;
     }
@@ -3524,10 +3525,11 @@ static int check_regexp_delim(int c)
 ///
 /// The usual escapes are supported as described in the regexp docs.
 ///
+/// @param tm             Timeout limit
 /// @param cmdpreview_ns  The namespace to show 'inccommand' preview highlights.
 ///                       If <= 0, preview shouldn't be shown.
 /// @return  0, 1 or 2. See cmdpreview_may_show() for more information on the meaning.
-static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_ns,
+static int do_sub(exarg_T *eap, proftime_T tm, const int cmdpreview_ns,
                   const handle_T cmdpreview_bufnr)
 {
 #define ADJUST_SUB_FIRSTLNUM() \
@@ -3678,15 +3680,14 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
   // check for a trailing count
   cmd = skipwhite(cmd);
   if (ascii_isdigit(*cmd)) {
-    i = getdigits_int(&cmd, true, INT_MAX);
+    const char *const count_arg = cmd;
+    i = getdigits_int(&cmd, false, INT_MAX);
     if (i <= 0 && !eap->skip && subflags.do_error) {
       emsg(_(e_zerocount));
       xfree(sub);
       return 0;
     } else if (i >= INT_MAX) {
-      char buf[20];
-      vim_snprintf(buf, sizeof(buf), "%d", i);
-      semsg(_(e_val_too_large), buf);
+      semsg(_(e_val_too_large_len), (int)(cmd - count_arg), count_arg);
       xfree(sub);
       return 0;
     }
@@ -3759,13 +3760,15 @@ static int do_sub(exarg_T *eap, const proftime_T timeout, const int cmdpreview_n
   // If preview: limit to max('cmdwinheight', viewport).
   linenr_T line2 = eap->line2;
 
+  int timed_out = false;
+
   for (linenr_T lnum = eap->line1;
-       lnum <= line2 && !got_quit && !aborting()
+       lnum <= line2 && !got_quit && !timed_out && !aborting()
        && (cmdpreview_ns <= 0 || preview_lines.lines_needed <= (linenr_T)p_cwh
            || lnum <= curwin->w_botline);
        lnum++) {
     int nmatch = vim_regexec_multi(&regmatch, curwin, curbuf, lnum,
-                                   0, NULL, NULL);
+                                   0, &tm, &timed_out);
     if (nmatch) {
       colnr_T copycol;
       colnr_T matchcol;
@@ -4342,7 +4345,7 @@ skip:
             || nmatch_tl > 0
             || (nmatch = vim_regexec_multi(&regmatch, curwin,
                                            curbuf, sub_firstlnum,
-                                           matchcol, NULL, NULL)) == 0
+                                           matchcol, &tm, &timed_out)) == 0
             || regmatch.startpos[0].lnum > 0) {
           if (new_start != NULL) {
             // Copy the rest of the line, that didn't match.
@@ -4418,7 +4421,7 @@ skip:
           }
           if (nmatch == -1 && !lastone) {
             nmatch = vim_regexec_multi(&regmatch, curwin, curbuf,
-                                       sub_firstlnum, matchcol, NULL, NULL);
+                                       sub_firstlnum, matchcol, &tm, &timed_out);
           }
 
           // 5. break if there isn't another match in this line
@@ -4475,7 +4478,7 @@ skip:
 
     line_breakcheck();
 
-    if (profile_passed_limit(timeout)) {
+    if (timed_out || profile_passed_limit(tm)) {
       got_quit = true;
     }
   }
@@ -4558,7 +4561,7 @@ skip:
 
   // Show 'inccommand' preview if there are matched lines.
   if (cmdpreview_ns > 0 && !aborting()) {
-    if (got_quit || profile_passed_limit(timeout)) {  // Too slow, disable.
+    if (got_quit || profile_passed_limit(tm)) {  // Too slow, disable.
       set_option_direct(kOptInccommand, STATIC_CSTR_AS_OPTVAL(""), 0, SID_NONE);
     } else if (*p_icm != NUL && pat != NULL) {
       if (pre_hl_id == 0) {

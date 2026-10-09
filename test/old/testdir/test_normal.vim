@@ -1202,6 +1202,31 @@ func Test_normal17_z_scroll_hor2()
   bw!
 endfunc
 
+func Test_large_sidescrolloff_no_overflow()
+  10new
+  20vsp
+  setlocal nowrap sidescrolloff=2147483647
+  call setline(1, repeat('a', 40))
+
+  normal! $
+  redraw!
+  call assert_equal(29, winsaveview().leftcol)
+
+  normal! zs
+  redraw!
+  call assert_equal(29, winsaveview().leftcol)
+
+  normal! ze
+  redraw!
+  call assert_equal(29, winsaveview().leftcol)
+
+  normal! 0
+  redraw!
+  call assert_equal(0, winsaveview().leftcol)
+
+  bw!
+endfunc
+
 " Test for commands that scroll the window horizontally. Test with folds.
 "   H, M, L, CTRL-E, CTRL-Y, CTRL-U, CTRL-D, PageUp, PageDown commands
 func Test_vert_scroll_cmds()
@@ -1876,14 +1901,13 @@ func Test_normal23_K()
   set iskeyword-=%
   set iskeyword-=\|
 
-  " Currently doesn't work in Nvim, see #19436
   " Test for specifying a count to K
-  " 1
-  " com! -nargs=* Kprog let g:Kprog_Args = <q-args>
-  " set keywordprg=:Kprog
-  " norm! 3K
-  " call assert_equal('3 version8', g:Kprog_Args)
-  " delcom Kprog
+  1
+  com! -nargs=* Kprog let g:Kprog_Args = <q-args>
+  set keywordprg=:Kprog
+  norm! 3K
+  call assert_equal('3 helphelp', g:Kprog_Args)
+  delcom Kprog
 
   " Only expect "man" to work on Unix
   if !has("unix") || has('nvim')  " Nvim K uses :terminal. #15398
@@ -4283,13 +4307,18 @@ func Test_single_line_filler_zb()
 endfunc
 
 " Test for zb with fewer buffer lines than window height, non-zero 'scrolloff'
-" and cursor on fold.
-func Test_zb_with_cursor_on_fold()
+" and cursor on or just above a fold.
+func Test_zb_with_cursor_on_or_just_above_fold()
   15new
   call setline(1, range(1, 5) + ['', 'foo{{{', 'bar}}}', '', 'baz'])
   setlocal foldmethod=marker scrolloff=1
   call assert_equal(8, foldclosedend(7))
+
   call cursor(7, 1)
+  normal! zb
+  call assert_equal(1, line('w0'))
+
+  call cursor(6, 1)
   normal! zb
   call assert_equal(1, line('w0'))
 

@@ -134,18 +134,20 @@ describe('lua stdlib', function()
 
     describe(('vim.deprecate prerel=%s,'):format(prerel or 'nil'), function()
       local curver --- @type {major:number, minor:number}
+      local curstr --- @type string
+      local nextver --- @type string
 
       before_each(function()
         curver = exec_lua('return vim.version()')
+        -- "0.10" or "0.10-dev+xxx"
+        curstr = ('%s.%s%s'):format(curver.major, curver.minor, prerel or '')
+        -- "0.10" or "0.11"
+        nextver = ('%s.%s'):format(curver.major, curver.minor + (prerel and 0 or 1))
       end)
 
       it('plugin=nil, same message skipped', function()
-        -- "0.10" or "0.10-dev+xxx"
-        local curstr = ('%s.%s%s'):format(curver.major, curver.minor, prerel or '')
         eq(
-          ([[foo.bar() is deprecated. Run ":checkhealth vim.deprecated" for more information]]):format(
-            curstr
-          ),
+          [[foo.bar() is deprecated. Run ":checkhealth vim.deprecated" for more information]],
           exec_lua('return vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', curstr)
         )
         -- Same message as above; skipped this time.
@@ -160,16 +162,23 @@ describe('lua stdlib', function()
       end)
 
       it('plugin=nil, show error if hard-deprecated', function()
-        -- "0.10" or "0.11"
-        local nextver = ('%s.%s'):format(curver.major, curver.minor + (prerel and 0 or 1))
-
-        local was_removed = prerel and 'was removed' or 'will be removed'
         eq(
-          dedent(
-            [[
-            foo.hard_dep() is deprecated. Run ":checkhealth vim.deprecated" for more information]]
-          ):format(was_removed, nextver),
+          [[foo.hard_dep() is deprecated. Run ":checkhealth vim.deprecated" for more information]],
           exec_lua('return vim.deprecate(...)', 'foo.hard_dep()', 'vim.new_api()', nextver)
+        )
+      end)
+
+      it('plugin=nil, message is only truncated in display #38841', function()
+        local screen = Screen.new(50, 10)
+        exec_lua('vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', curstr)
+        screen:expect([[
+          ^                                                  |
+          {1:~                                                 }|*8
+          {19:foo.bar() is deprecated. Run ":checkhealth vim.dep}|
+        ]])
+        eq(
+          [[foo.bar() is deprecated. Run ":checkhealth vim.deprecated" for more information]],
+          n.exec_capture('messages')
         )
       end)
 
@@ -825,6 +834,26 @@ describe('lua stdlib', function()
     )
   end)
 
+  it('vim._copy', function()
+    ok(exec_lua([[
+      local inner = { x = 1 }
+      local mt = { tag = true }
+      local a = setmetatable({ inner = inner }, mt)
+      local b = vim._copy(a)
+
+      local c = vim.empty_dict()
+      c.inner = inner
+      local d = vim._copy(c)
+
+      return b ~= a
+        and b.inner == inner
+        and getmetatable(b) == mt
+        and d ~= c
+        and d.inner == inner
+        and not vim.islist(d)
+    ]]))
+  end)
+
   it('vim.pesc', function()
     eq('foo%-bar', exec_lua([[return vim.pesc('foo-bar')]]))
     eq('foo%%%-bar', exec_lua([[return vim.pesc(vim.pesc('foo-bar'))]]))
@@ -940,6 +969,17 @@ describe('lua stdlib', function()
     eq(false, exec_lua('return vim.islist({1, 2, nil, 4})'))
     eq(false, exec_lua('return vim.islist({nil, 2, 3, 4})'))
     eq(false, exec_lua('return vim.islist({1, [1.5]=2, [3]=3})'))
+    eq(
+      false,
+      exec_lua([[
+        local t = setmetatable({ 1, [3] = 3 }, {
+          __index = function()
+            return 2
+          end,
+        })
+        return vim.islist(t)
+      ]])
+    )
   end)
 
   it('vim.tbl_isempty', function()
@@ -1240,10 +1280,17 @@ describe('lua stdlib', function()
     eq(true, exec_lua [[ return vim.deep_equal({a={b=1}}, {a={b=1}}) ]])
     eq(true, exec_lua [[ return vim.deep_equal({a={b={nil}}}, {a={b={}}}) ]])
     eq(true, exec_lua [[ return vim.deep_equal({a=1, [5]=5}, {nil,nil,nil,nil,5,a=1}) ]])
+    eq(
+      true,
+      exec_lua [[ local shared = {}; return vim.deep_equal({ 1, shared, 1, shared }, { 1, {}, 1, {} }) ]]
+    )
+    -- cyclic table
+    eq(true, exec_lua [[ local a,b={},{}; a[1]=a; b[1]=b; return vim.deep_equal(a, b) ]])
     eq(false, exec_lua [[ return vim.deep_equal(1, {nil,nil,nil,nil,5,a=1}) ]])
     eq(false, exec_lua [[ return vim.deep_equal(1, 3) ]])
     eq(false, exec_lua [[ return vim.deep_equal(nil, 3) ]])
     eq(false, exec_lua [[ return vim.deep_equal({a=1}, {a=2}) ]])
+    eq(false, exec_lua [[ local a,b={},{}; a[1]=a; b[1]={}; return vim.deep_equal(a, b) ]])
   end)
 
   it('vim.list_extend', function()
@@ -1749,6 +1796,22 @@ describe('lua stdlib', function()
     ]]
 
     eq(2, fn.luaeval 'vim.g.var')
+
+    -- Passing many arguments to indexed vim.cmd (#41314)
+    local props = exec_lua [[
+      local props = {}
+      for i = 1, 300 do
+        props[i] = ('custom_property_%03d'):format(i)
+      end
+      vim.cmd.syntax { 'keyword', 'editorconfigProperty', unpack(props) }
+      return props
+    ]]
+
+    local output = n.exec_capture('syntax list editorconfigProperty')
+    output = output:match('^%-%-%- Syntax items %-%-%-\neditorconfigProperty xxx (.*)')
+    local output_list = vim.split(output, ' ')
+    table.sort(output_list)
+    eq(props, output_list)
   end)
 
   it('vim.regex', function()
@@ -1771,6 +1834,29 @@ describe('lua stdlib', function()
     -- vim.regex() error inside :silent! should not crash. #20546
     command([[silent! lua vim.regex('\\z')]])
     assert_alive()
+
+    -- match_str() in a fast (luv) callback does not abort. #18111
+    eq(
+      { true, true },
+      exec_lua(function()
+        local re = vim.regex('^.*\\.go$')
+        local res
+        local timer = assert(vim.uv.new_timer())
+        timer:start(10, 0, function()
+          -- Enough matches to reach BREAKCHECK_SKIP, which would abort (reentrant event loop).
+          local ok = true
+          for _ = 1, 3000 do
+            ok = ok and re:match_str('internal/config/config.go') ~= nil
+          end
+          res = { ok, vim.in_fast_event() }
+          timer:close()
+        end)
+        vim.wait(1000, function()
+          return res ~= nil
+        end)
+        return res
+      end)
+    )
   end)
 
   it('vim.defer_fn', function()

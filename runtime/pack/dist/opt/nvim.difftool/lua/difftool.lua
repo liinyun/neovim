@@ -117,11 +117,13 @@ local function diff_dirs_diffr(left_dir, right_dir, opt)
   table.insert(args, left_dir)
   table.insert(args, right_dir)
 
-  local lines = vim.fn.systemlist(args)
+  -- Force English locale so that we can rely on the output format
+  local result = vim.system(args, { text = true, env = { LC_ALL = 'C' } }):wait()
+  local lines = vim.split(result.stdout or '', '\n', { trimempty = true })
   local qf_entries = {}
 
   for _, line in ipairs(lines) do
-    local modified_left, modified_right = line:match('^Files (.+) and (.+) differ$')
+    local modified_left, modified_right = line:match("^Files '?(.-)'? and '?(.-)'? differ$")
     if modified_left and modified_right then
       local left_exists = vim.fn.filereadable(modified_left) == 1
       local right_exists = vim.fn.filereadable(modified_right) == 1

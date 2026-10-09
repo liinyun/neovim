@@ -1,3 +1,15 @@
+--- @brief
+--- Snippet expansion and navigation.
+---
+--- Internal autocmds live in the `nvim.snippet` augroup. To disable them (e.g.
+--- to manage sessions yourself), clear it:
+---
+--- ```lua
+--- vim.api.nvim_clear_autocmds({ group = 'nvim.snippet', buffer = 0 })
+--- ```
+---
+--- Heads-up: |vim.snippet.jump()| re-registers them on every jump.
+
 local G = vim.lsp._snippet_grammar
 local snippet_group = vim.api.nvim_create_augroup('nvim.snippet', {})
 local snippet_ns = vim.api.nvim_create_namespace('nvim.snippet')
@@ -114,13 +126,13 @@ local Tabstop = {}
 ---
 --- @package
 --- @param index integer
---- @param bufnr integer
+--- @param buf integer
 --- @param placement integer
 --- @param range Range4
 --- @param choices? string[]
 --- @return vim.snippet.Tabstop
-function Tabstop.new(index, bufnr, placement, range, choices)
-  local extmark_id = vim.api.nvim_buf_set_extmark(bufnr, snippet_ns, range[1], range[2], {
+function Tabstop.new(index, buf, placement, range, choices)
+  local extmark_id = vim.api.nvim_buf_set_extmark(buf, snippet_ns, range[1], range[2], {
     right_gravity = true,
     end_right_gravity = false,
     end_line = range[3],
@@ -130,7 +142,7 @@ function Tabstop.new(index, bufnr, placement, range, choices)
 
   local self = setmetatable({
     extmark_id = extmark_id,
-    bufnr = bufnr,
+    bufnr = buf,
     index = index,
     placement = placement,
     choices = choices,
@@ -216,17 +228,17 @@ local Session = {}
 --- Creates a new snippet session in the current buffer.
 ---
 --- @package
---- @param bufnr integer
+--- @param buf integer
 --- @param snippet_extmark integer
 --- @param tabstop_data table<integer, { placement: integer, range: Range4, choices?: string[] }[]>
 --- @return vim.snippet.Session
-function Session.new(bufnr, snippet_extmark, tabstop_data)
+function Session.new(buf, snippet_extmark, tabstop_data)
   local self = setmetatable({
-    bufnr = bufnr,
+    bufnr = buf,
     extmark_id = snippet_extmark,
     tabstops = {},
     tabstop_placements = {},
-    current_tabstop = Tabstop.new(0, bufnr, 0, { 0, 0, 0, 0 }),
+    current_tabstop = Tabstop.new(0, buf, 0, { 0, 0, 0, 0 }),
     tab_keymaps = { i = nil, s = nil },
     shift_tab_keymaps = { i = nil, s = nil },
   }, { __index = Session })
@@ -390,7 +402,7 @@ local function setup_autocmds(bufnr)
   vim.api.nvim_create_autocmd({ 'CursorMoved', 'CursorMovedI' }, {
     group = snippet_group,
     desc = 'Update snippet state when the cursor moves',
-    buffer = bufnr,
+    buf = bufnr,
     callback = function()
       -- Just update the tabstop in insert and select modes.
       if not vim.fn.mode():match('^[isS]') then
@@ -434,7 +446,7 @@ local function setup_autocmds(bufnr)
   vim.api.nvim_create_autocmd({ 'TextChanged', 'TextChangedI', 'TextChangedP' }, {
     group = snippet_group,
     desc = 'Update active tabstops when buffer text changes',
-    buffer = bufnr,
+    buf = bufnr,
     callback = function()
       -- Check that the snippet hasn't been deleted.
       local snippet_range = get_extmark_range(M._session.bufnr, M._session.extmark_id)
@@ -463,9 +475,26 @@ local function setup_autocmds(bufnr)
   vim.api.nvim_create_autocmd('BufLeave', {
     group = snippet_group,
     desc = 'Stop the snippet session when leaving the buffer',
-    buffer = bufnr,
+    buf = bufnr,
     callback = function()
       M.stop()
+    end,
+  })
+
+  vim.api.nvim_create_autocmd('ModeChanged', {
+    group = snippet_group,
+    desc = 'Stop the snippet session when leaving select mode',
+    buf = bufnr,
+    callback = function(args)
+      if args.match ~= 's:n' and args.match ~= 'i:n' then
+        return
+      end
+      vim.schedule(function()
+        if not M.active() or vim.api.nvim_get_mode().mode:match('^[siRS\19]') then
+          return
+        end
+        M.stop()
+      end)
     end,
   })
 end
@@ -635,7 +664,7 @@ function M.jump(direction)
   end
 
   -- Clear the autocommands so that we can move the cursor freely while selecting the tabstop.
-  vim.api.nvim_clear_autocmds({ group = snippet_group, buffer = M._session.bufnr })
+  vim.api.nvim_clear_autocmds({ group = snippet_group, buf = M._session.bufnr })
 
   M._session.current_tabstop = dest
   M._session:set_gravity()
@@ -678,7 +707,7 @@ function M.stop()
     return
   end
 
-  vim.api.nvim_clear_autocmds({ group = snippet_group, buffer = M._session.bufnr })
+  vim.api.nvim_clear_autocmds({ group = snippet_group, buf = M._session.bufnr })
   vim.api.nvim_buf_clear_namespace(M._session.bufnr, snippet_ns, 0, -1)
 
   M._session = nil

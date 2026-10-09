@@ -190,7 +190,7 @@ end
 ---
 --- Predicate which decides if a client should be re-used. Used on all running clients. The default
 --- implementation re-uses a client if name and root_dir matches.
---- @field reuse_client? fun(client: vim.lsp.Client, config: vim.lsp.ClientConfig): boolean #
+--- @field reuse_client? fun(client: vim.lsp.Client, config: vim.lsp.ClientConfig, bufnr: integer): boolean #
 ---
 --- [lsp-root_dir()]()
 --- Decides the workspace root: the directory where the LSP server will base its workspaceFolders,
@@ -531,9 +531,20 @@ local function lsp_enable_callback(bufnr)
       lsp.is_enabled(client.name)
       -- Check that the client is managed by vim.lsp.config before deciding to detach it!
       and lsp.config[client.name]
-      and not can_start(bufnr, lsp.config[client.name], false)
     then
-      lsp.buf_detach_client(bufnr, client.id)
+      if can_start(bufnr, lsp.config[client.name], false) then
+        -- When switch between lsp supported filetype (e.g. json to jsonc like #39498),
+        -- client should send `textDocument/didClose` + `textDocument/didOpen` with new language id
+        local new_language_id = client.get_language_id(bufnr, vim.bo[bufnr].filetype)
+        local old_language_id = client.attached_buffers[bufnr] ---@type string?
+        if old_language_id and old_language_id ~= new_language_id then
+          client:_text_document_did_close_handler(bufnr)
+          client.attached_buffers[bufnr] = new_language_id
+          client:_text_document_did_open_handler(bufnr)
+        end
+      else
+        lsp.buf_detach_client(bufnr, client.id)
+      end
     end
   end
 
@@ -604,7 +615,6 @@ function lsp.enable(name, enable)
   validate('name', name, { 'string', 'table' })
 
   local names = vim._ensure_list(name) --[[@as string[] ]]
-  local configs = {} --- @type table<string,{resolved_config:vim.lsp.Config?}>
 
   -- Check for errors, and abort with no side-effects if there is one.
   for _, nm in ipairs(names) do
@@ -615,13 +625,13 @@ function lsp.enable(name, enable)
     -- Raise error if `lsp.config[nm]` raises an error, instead of waiting for
     -- the error to be triggered by `lsp_enable_callback()`.
     if enable ~= false then
-      configs[nm] = { resolved_config = lsp.config[nm] }
+      _ = lsp.config[nm]
     end
   end
 
   -- Now that there can be no errors, enable/disable all names.
   for _, nm in ipairs(names) do
-    lsp._enabled_configs[nm] = enable ~= false and configs[nm] or nil
+    lsp._enabled_configs[nm] = enable ~= false and {} or nil
   end
 
   if not next(lsp._enabled_configs) then
@@ -672,7 +682,7 @@ end
 --- running clients. The default implementation re-uses a client if it has the
 --- same name and if the given workspace folders (or root_dir) are all included
 --- in the client's workspace folders.
---- @field reuse_client? fun(client: vim.lsp.Client, config: vim.lsp.ClientConfig): boolean
+--- @field reuse_client? fun(client: vim.lsp.Client, config: vim.lsp.ClientConfig, bufnr: integer): boolean
 ---
 --- Buffer handle to attach to if starting or re-using a client (0 for current).
 --- @field bufnr? integer
@@ -703,7 +713,7 @@ end
 --- See |vim.lsp.ClientConfig| for all available options. The most important are:
 ---
 --- - `name` arbitrary name for the LSP client. Should be unique per language server.
---- - `cmd` command string[] or function.
+--- - `cmd` command string[] or function. See also |lsp-server|.
 --- - `root_dir` path to the project root. By default this is used to decide if an existing client
 ---   should be re-used. The example above uses |vim.fs.root()| to detect the root by traversing
 ---   the file system upwards starting from the current directory until either a `pyproject.toml`
@@ -751,7 +761,7 @@ function lsp.start(config, opts)
   end
 
   for _, client in pairs(lsp.client._all) do
-    if reuse_client(client, config) then
+    if reuse_client(client, config, bufnr) then
       if opts.attach == false then
         return client.id
       end
@@ -883,42 +893,7 @@ end
 ---Buffer lifecycle handler for textDocument/didSave
 --- @param bufnr integer
 local function text_document_did_save_handler(bufnr)
-  bufnr = vim._resolve_bufnr(bufnr)
-  local uri = vim.uri_from_bufnr(bufnr)
-  local text = vim.func._memoize('concat', lsp._buf_get_full_text)
-  for _, client in ipairs(lsp.get_clients({ bufnr = bufnr })) do
-    local name = api.nvim_buf_get_name(bufnr)
-    local old_name = changetracking._get_and_set_name(client, bufnr, name)
-    if old_name and name ~= old_name then
-      client:notify('textDocument/didClose', {
-        textDocument = {
-          uri = vim.uri_from_fname(old_name),
-        },
-      })
-      client:notify('textDocument/didOpen', {
-        textDocument = {
-          version = 0,
-          uri = uri,
-          languageId = client.get_language_id(bufnr, vim.bo[bufnr].filetype),
-          text = lsp._buf_get_full_text(bufnr),
-        },
-      })
-      util.buf_versions[bufnr] = 0
-    end
-    local save_capability = vim.tbl_get(client.server_capabilities, 'textDocumentSync', 'save')
-    if save_capability then
-      local included_text --- @type string?
-      if type(save_capability) == 'table' and save_capability.includeText then
-        included_text = text(bufnr)
-      end
-      client:notify('textDocument/didSave', {
-        textDocument = {
-          uri = uri,
-        },
-        text = included_text,
-      })
-    end
-  end
+  changetracking._send_did_save(bufnr)
 end
 
 --- @type table<integer,true>
@@ -936,7 +911,7 @@ local function buf_attach(bufnr)
   local group = api.nvim_create_augroup(augroup, { clear = true })
   api.nvim_create_autocmd('BufWritePre', {
     group = group,
-    buffer = bufnr,
+    buf = bufnr,
     desc = 'vim.lsp: textDocument/willSave',
     callback = function(ctx)
       for _, client in ipairs(lsp.get_clients({ bufnr = ctx.buf })) do
@@ -947,7 +922,7 @@ local function buf_attach(bufnr)
           reason = protocol.TextDocumentSaveReason.Manual, ---@type integer
         }
         if client:supports_method('textDocument/willSave') then
-          client:notify('textDocument/willSave', params)
+          client:notify('textDocument/willSave', params, bufnr)
         end
         if client:supports_method('textDocument/willSaveWaitUntil') then
           local result, err =
@@ -963,7 +938,7 @@ local function buf_attach(bufnr)
   })
   api.nvim_create_autocmd('BufWritePost', {
     group = group,
-    buffer = bufnr,
+    buf = bufnr,
     desc = 'vim.lsp: textDocument/didSave handler',
     callback = function(ctx)
       text_document_did_save_handler(ctx.buf)
@@ -986,7 +961,7 @@ local function buf_attach(bufnr)
       for _, client in ipairs(clients) do
         changetracking.reset_buf(client, bufnr)
         if client:supports_method('textDocument/didClose') then
-          client:notify('textDocument/didClose', params)
+          client:notify('textDocument/didClose', params, bufnr)
         end
       end
       for _, client in ipairs(clients) do
@@ -1038,7 +1013,7 @@ function lsp.buf_attach_client(bufnr, client_id)
     return true
   end
 
-  client.attached_buffers[bufnr] = true
+  client.attached_buffers[bufnr] = client.get_language_id(bufnr, vim.bo[bufnr].filetype)
 
   -- This is our first time attaching this client to this buffer.
   -- Send didOpen for the client if it is initialized. If it isn't initialized

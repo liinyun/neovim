@@ -288,17 +288,17 @@ do
     )
   end
 
+  --- Execute a command and print errors without a stacktrace.
+  --- @param opts vim.api.keyset.cmd Arguments to |nvim_cmd()|
+  local function cmd(opts)
+    local ok, err = pcall(vim.api.nvim_cmd, opts, {})
+    if not ok then
+      vim.api.nvim_echo({ { err:sub(#'Vim:' + 1) } }, true, { err = true })
+    end
+  end
+
   --- vim-unimpaired style mappings. See: https://github.com/tpope/vim-unimpaired
   do
-    --- Execute a command and print errors without a stacktrace.
-    --- @param opts table Arguments to |nvim_cmd()|
-    local function cmd(opts)
-      local ok, err = pcall(vim.api.nvim_cmd, opts, {})
-      if not ok then
-        vim.api.nvim_echo({ { err:sub(#'Vim:' + 1) } }, true, { err = true })
-      end
-    end
-
     -- Quickfix mappings
     vim.keymap.set('n', '[q', function()
       cmd({ cmd = 'cprevious', count = vim.v.count1 })
@@ -459,6 +459,14 @@ do
       require 'vim.treesitter._select'.select_next(vim.v.count1)
     end, { desc = 'Select next node' })
 
+    vim.keymap.set({ 'x' }, '[N', function()
+      require 'vim.treesitter._select'.select_grow_prev(vim.v.count1)
+    end, { desc = 'Select previous sibling node' })
+
+    vim.keymap.set({ 'x' }, ']N', function()
+      require 'vim.treesitter._select'.select_grow_next(vim.v.count1)
+    end, { desc = 'Select next sibling node' })
+
     vim.keymap.set({ 'x', 'o' }, 'an', function()
       if vim.treesitter.get_parser(nil, nil, { error = false }) then
         require 'vim.treesitter._select'.select_parent(vim.v.count1)
@@ -617,7 +625,7 @@ do
         -- TermClose may be queued before TermOpen if process exits before `terminal_open` is called.
         -- Don't display the msg now, let TermOpen display it.
         vim.api.nvim_create_autocmd('TermOpen', {
-          buffer = ev.buf,
+          buf = ev.buf,
           once = true,
           callback = function()
             set_terminal_exitmsg(ev.buf, msg, pos)
@@ -773,7 +781,8 @@ do
       vim.v.swapchoice = 'e' -- Choose "(E)dit".
       vim.notify(
         ('W325: Ignoring swapfile from Nvim process %d'):format(info.pid),
-        vim.log.levels.WARN
+        vim.log.levels.WARN,
+        { _truncate = true }
       )
     end,
   })
@@ -831,7 +840,10 @@ do
     --- ignored in the calculations.
     ---
     --- [1] https://en.wikipedia.org/wiki/Luma_%28video%29
-    do
+    ---
+    --- In slow environments (e.g. SSH with high latency), this will increase
+    --- startup time and produce a warning, so users may want to disable it.
+    if vim.o.ttyfast then
       --- Parse a string of hex characters as a color.
       ---
       --- The string can contain 1 to 4 hex characters. The returned value is
@@ -928,20 +940,6 @@ do
               local luminance = (0.299 * rr) + (0.587 * gg) + (0.114 * bb)
               local bg = luminance < 0.5 and 'dark' or 'light'
               vim.api.nvim_set_option_value('background', bg, {})
-
-              -- Ensure OptionSet still triggers when we set the background during startup
-              if vim.v.vim_did_enter == 0 then
-                vim.api.nvim_create_autocmd('VimEnter', {
-                  group = group,
-                  once = true,
-                  nested = true,
-                  callback = function()
-                    vim.api.nvim_exec_autocmds('OptionSet', {
-                      pattern = 'background',
-                    })
-                  end,
-                })
-              end
             end
           end
         end,
@@ -983,8 +981,9 @@ do
         and os.getenv('NVIM_TEST') == nil
       then
         vim.notify(
-          'defaults.lua: Did not detect DSR response from terminal. This results in a slower startup time.',
-          vim.log.levels.WARN
+          "E1568: Terminal did not respond to DSR request for 'background' color. Startup may be slower. :help 'ttyfast'",
+          vim.log.levels.WARN,
+          { _truncate = true }
         )
       end
     end
@@ -1000,7 +999,7 @@ do
         -- The TUI was able to determine truecolor support or $COLORTERM explicitly indicates
         -- truecolor support
         setoption('termguicolors', true)
-      elseif colorterm == nil or colorterm == '' then
+      elseif (colorterm == nil or colorterm == '') and vim.o.ttyfast then
         -- Neither the TUI nor $COLORTERM indicate that truecolor is supported, so query the
         -- terminal
         local caps = {} ---@type table<string, boolean>

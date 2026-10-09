@@ -14,6 +14,7 @@
 #include "klib/kvec.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
+#include "nvim/api/vim.h"
 #include "nvim/ascii_defs.h"
 #include "nvim/autocmd.h"
 #include "nvim/buffer_defs.h"
@@ -118,7 +119,7 @@ static int progress_msg_target = PROGRESS_TARGET_CMD;
 static FILE *verbose_fd = NULL;
 static bool verbose_did_open = false;
 
-bool keep_msg_more = false;    // keep_msg was set by msgmore()
+static bool keep_msg_more = false;    // keep_msg was set by msgmore()
 
 // When writing messages to the screen, there are many different situations.
 // A number of variables is used to remember the current state:
@@ -164,6 +165,7 @@ static sattr_T msg_ext_last_attr = -1;
 static int msg_ext_last_hl_id;
 
 static bool msg_ext_history = false;  ///< message was added to history
+static bool msg_ext_append = false;  ///< message appended to previous message line
 
 static int msg_grid_pos_at_flush = 0;
 
@@ -387,7 +389,6 @@ MsgID msg_multihl(MsgID id, HlMessage hl_msg, const char *kind, bool history, bo
   msg_clr_eos();
   bool need_clear = false;
   bool hl_msg_updated = false;
-  msg_ext_history = history;
   if (kind != NULL) {
     msg_ext_set_kind(kind);
   }
@@ -1099,6 +1100,31 @@ char *msg_may_trunc(bool force, char *s)
   return s;
 }
 
+char *msg_progress(char *s, char *id, char *status, int hl_id, bool hist, bool trunc)
+{
+  Error err = ERROR_INIT;
+  Dict(echo_opts) opts = {
+    .kind = cstr_as_string("progress"),
+    .source = cstr_as_string("nvim"),
+    .status = cstr_as_string(status),
+    .id = CSTR_AS_OBJ(id),
+  };
+  if (hist && (!trunc || ui_has(kUIMessages))) {
+    msg_hist_add(s, -1, 0);
+  }
+  if (trunc) {
+    s = msg_may_trunc(false, s);
+  }
+  MAXSIZE_TEMP_ARRAY(chunk, 2);
+  MAXSIZE_TEMP_ARRAY(chunks, 1);
+  ADD_C(chunk, CSTR_AS_OBJ(s));
+  ADD_C(chunk, INTEGER_OBJ(hl_id));
+  ADD_C(chunks, ARRAY_OBJ(chunk));
+  nvim_echo(chunks, false, &opts, &err);
+  ui_flush();
+  return s;
+}
+
 void hl_msg_free(HlMessage hl_msg)
 {
   for (size_t i = 0; i < kv_size(hl_msg); i++) {
@@ -1686,9 +1712,14 @@ void msg_ext_set_kind(const char *msg_kind)
   redir_col = msg_ext_append ? redir_col : 0;
 }
 
+void msg_ext_set_append(bool append)
+{
+  msg_ext_ui_flush();
+  msg_ext_append = append;
+}
+
 void msg_ext_set_trigger(const char *trigger)
 {
-  // Don't change the trigger of an existing batch:
   msg_ext_ui_flush();
   msg_ext_trigger = trigger;
 }
@@ -2340,6 +2371,7 @@ void msg_puts_len(const char *const str, const ptrdiff_t len, int hl_id, bool hi
   // Don't print anything when using ":silent cmd" or empty message.
   if (msg_silent != 0 || *str == NUL) {
     if (*str == NUL && ui_has(kUIMessages)) {
+      msg_ext_ui_flush();  // ensure messages until now are emitted
       ui_call_msg_show(cstr_as_string("empty"), (Array)ARRAY_DICT_INIT, false, false, false,
                        INTEGER_OBJ(-1), (String)STRING_INIT);
       cmdline_was_last_drawn = false;

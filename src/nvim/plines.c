@@ -269,7 +269,7 @@ CharSize charsize_regular(CharsizeArg *csarg, char *const cur, colnr_T const vco
 
         if (max_head_vcol == 0 || vcol + size + added < max_head_vcol) {
           head += cnt * head_mid;
-        } else if (max_head_vcol > vcol + head_prev + prev_rem) {
+        } else if (width2 > 0 && max_head_vcol > vcol + head_prev + prev_rem) {
           head += (max_head_vcol - (vcol + head_prev + prev_rem)
                    + width2 - 1) / width2 * head_mid;
         } else if (max_head_vcol < 0) {
@@ -311,7 +311,7 @@ CharSize charsize_regular(CharsizeArg *csarg, char *const cur, colnr_T const vco
       colmax += col_adj;
       int n = colmax + win_col_off2(wp);
       if (n > 0) {
-        colmax += (((vcol - colmax) / n) + 1) * n - col_adj;
+        colmax += (((vcol + col_adj - colmax) / n) + 1) * n - col_adj;
       }
     }
 

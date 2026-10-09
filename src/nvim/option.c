@@ -407,6 +407,12 @@ void set_init_1(bool clean_arg)
   // Expand environment variables and things like "~" for the defaults.
   set_init_expand_env();
 
+  // Allow disabling ttyfast during startup to disable features such as
+  // automatic background detection over slow connections.
+  if (os_env_exists("NVIM_NOTTYFAST", false)) {
+    set_option_value_give_err(kOptTtyfast, BOOLEAN_OPTVAL(false), 0);
+  }
+
   save_file_ff(curbuf);         // Buffer is unchanged
 
   // Detect use of mlterm.
@@ -1209,7 +1215,7 @@ static int validate_opt_idx(win_T *win, OptIndex opt_idx, int opt_flags, uint32_
 
   // Disallow changing some options from modelines.
   if (opt_flags & OPT_MODELINE) {
-    if (flags & (kOptFlagSecure | kOptFlagNoML)) {
+    if (flags & kOptFlagSecure) {
       *errmsg = e_not_allowed_in_modeline;
       return FAIL;
     }
@@ -4007,7 +4013,7 @@ void set_option_direct_for(OptIndex opt_idx, OptVal value, int opt_flags, scid_T
   curbuf = save_curbuf;
 }
 
-/// Set the value of an option.
+/// Sets the value of an (non-tty) option.
 ///
 /// @param      opt_idx    Index in options[] table. Must not be kOptInvalid.
 /// @param[in]  value      Option value. If NIL_OPTVAL, the option value is cleared.
@@ -6548,21 +6554,21 @@ dict_T *get_winbuf_options(const int bufopt)
 
 /// Return the effective 'scrolloff' value for the current window, using the
 /// global value when appropriate.
-int get_scrolloff_value(win_T *wp)
+int64_t get_scrolloff_value(win_T *wp)
 {
   // Disallow scrolloff in terminal-mode. #11915
   // Still allow 'scrolloff' for non-terminal buffers. #34447
   if ((State & MODE_TERMINAL) && wp->w_buffer->terminal) {
     return 0;
   }
-  return (int)(wp->w_p_so < 0 ? p_so : wp->w_p_so);
+  return wp->w_p_so < 0 ? p_so : wp->w_p_so;
 }
 
 /// Return the effective 'sidescrolloff' value for the current window, using the
 /// global value when appropriate.
-int get_sidescrolloff_value(win_T *wp)
+int64_t get_sidescrolloff_value(win_T *wp)
 {
-  return (int)(wp->w_p_siso < 0 ? p_siso : wp->w_p_siso);
+  return wp->w_p_siso < 0 ? p_siso : wp->w_p_siso;
 }
 
 Dict get_vimoption(String name, int opt_flags, buf_T *buf, win_T *win, Arena *arena, Error *err)

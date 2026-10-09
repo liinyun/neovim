@@ -1019,6 +1019,13 @@ restofline:
       // global file names
       status = qf_parse_file_pfx(idx, fields, qfl, tail);
       if (status == QF_MULTISCAN) {
+        char *s = skipwhite(tail);
+        size_t new_linelen = strlen(s);
+        if (new_linelen >= linelen) {
+          return QF_IGNORE_LINE;
+        }
+        linebuf = s;
+        linelen = new_linelen;
         goto restofline;
       }
     }
@@ -1665,7 +1672,7 @@ static int qf_parse_dir_pfx(int idx, qffields_T *fields, qf_list_T *qfl)
 }
 
 /// Parse global file name error format prefixes (%O, %P and %Q).
-static int qf_parse_file_pfx(int idx, qffields_T *fields, qf_list_T *qfl, char *tail)
+static int qf_parse_file_pfx(int idx, qffields_T *fields, qf_list_T *qfl, const char *tail)
 {
   fields->valid = false;
   if (*fields->namebuf == NUL || os_path_exists(fields->namebuf)) {
@@ -1676,7 +1683,6 @@ static int qf_parse_file_pfx(int idx, qffields_T *fields, qf_list_T *qfl, char *
     }
     *fields->namebuf = NUL;
     if (tail && *tail) {
-      STRMOVE(IObuff, skipwhite(tail));
       qfl->qf_multiscan = true;
       return QF_MULTISCAN;
     }
@@ -6580,12 +6586,16 @@ static int qf_get_properties(win_T *wp, dict_T *what, dict_T *retdict)
   return status;
 }
 
-/// Set the current index in the specified quickfix list
-/// @return OK
+/// Set the 'quickfixtextfunc' in the specified quickfix/location list
+/// @return OK or FAIL
 static int qf_setprop_qftf(qf_list_T *qfl, dictitem_T *di)
   FUNC_ATTR_NONNULL_ALL
 {
   Callback cb;
+
+  if (check_secure()) {
+    return FAIL;
+  }
 
   callback_free(&qfl->qf_qftf_cb);
   if (callback_from_typval(&cb, &di->di_tv)) {

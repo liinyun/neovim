@@ -16,6 +16,8 @@ local ok = t.ok
 local rmdir = n.rmdir
 local new_pipename = n.new_pipename
 local pesc = vim.pesc
+local is_os = t.is_os
+local skip = t.skip
 local set_session = n.set_session
 local async_meths = n.async_meths
 local expect_msg_seq = n.expect_msg_seq
@@ -116,6 +118,10 @@ describe("preserve and (R)ecover with custom 'directory'", function()
   end)
 
   it('killing TUI process without :preserve #22096', function()
+    -- Windows(#38669): inner server could attach to the outer Nvim terminal's console
+    -- and die abruptly when the outer terminal job closed, leaving an unreadable swapfile
+    skip(is_os('win'), 'unreadable swapfile on Windows after TUI process exit')
+
     local screen0 = Screen.new()
     local child_server = new_pipename()
     fn.jobstart({ nvim_prog, '-u', 'NONE', '-i', 'NONE', '--listen', child_server }, {
@@ -136,37 +142,70 @@ describe("preserve and (R)ecover with custom 'directory'", function()
     test_recover(swappath1)
   end)
 
-  it('manual :recover with multiple swapfiles', function()
-    local swappath1 = setup_swapname()
-    eq('.swp', swappath1:match('%.[^.]+$'))
-    nvim0:close()
-    neq(nil, uv.fs_stat(swappath1))
-    local swappath2 = swappath1:gsub('%.swp$', '.swo')
-    eq(true, uv.fs_copyfile(swappath1, swappath2))
-    clear()
-    exec(init)
-    local screen = Screen.new(256, 40)
-    feed(':recover! ' .. testfile .. '<CR>')
-    screen:expect({
-      any = {
-        '\nSwap files found:',
-        '\n   In directory ',
-        vim.pesc('\n1.    '),
-        vim.pesc('\n2.    '),
-        vim.pesc('\nEnter number of swap file to use (0 to quit): ^'),
-      },
-      none = vim.pesc('{18:^@}'),
-    })
-    feed('2<CR>')
-    screen:expect({
-      any = {
-        vim.pesc('\nRecovery completed.'),
-        vim.pesc('\n{6:Press ENTER or type command to continue}^'),
-      },
-    })
-    feed('<CR>')
-    expect('sometext')
-  end)
+  for _, ext in ipairs({ false, true }) do
+    it('manual :recover with multiple swapfiles' .. (ext and 'with ext_messages' or ''), function()
+      local swappath1 = setup_swapname()
+      eq('.swp', swappath1:match('%.[^.]+$'))
+      nvim0:close()
+      neq(nil, uv.fs_stat(swappath1))
+      local swappath2 = swappath1:gsub('%.swp$', '.swo')
+      eq(true, uv.fs_copyfile(swappath1, swappath2))
+      clear()
+      exec(init)
+      local screen, msg = Screen.new(256, 40, { ext_messages = ext }), nil
+      feed(':recover! ' .. testfile .. '<CR>')
+      if ext then
+        screen:expect({
+          cmdline = {
+            {
+              content = { { '' } },
+              pos = 0,
+              prompt = 'Enter number of swap file to use (0 to quit): ',
+            },
+          },
+          condition = function()
+            msg = msg or screen.messages[1]
+            eq(true, msg.content[1][2]:match('Swap.*none --') ~= nil)
+            eq('list_cmd', msg.kind)
+            screen.messages = {}
+          end,
+        })
+      else
+        screen:expect({
+          any = {
+            '\nSwap files found:',
+            '\n   In directory ',
+            vim.pesc('\n1.    '),
+            vim.pesc('\n2.    '),
+            vim.pesc('\nEnter number of swap file to use (0 to quit): ^'),
+          },
+          none = vim.pesc('{18:^@}'),
+        })
+      end
+      feed('2<CR>')
+      if ext then
+        screen:expect({
+          any = { 'sometext' },
+          condition = function()
+            eq('wmsg', screen.messages[1].kind)
+            eq(true, screen.messages[1].content[1][2]:match('Using.*Original') ~= nil)
+            eq('wmsg', screen.messages[1].kind)
+            eq(true, screen.messages[2].content[1][2]:match('Recovery.*You might.*You may') ~= nil)
+            screen.messages = {}
+          end,
+        })
+      else
+        screen:expect({
+          any = {
+            vim.pesc('\nRecovery completed.'),
+            vim.pesc('\n{6:Press ENTER or type command to continue}^'),
+          },
+        })
+      end
+      feed('<CR>')
+      expect('sometext')
+    end)
+  end
 end)
 
 describe('swapfile detection', function()
@@ -354,10 +393,67 @@ pcall(vim.cmd.edit, 'Xtest_swapredraw.lua')
     set_session(nvim1)
     local screen = Screen.new(75, 18)
     exec(init)
-    feed(':edit Xfile1\n')
 
-    screen:expect({ any = ('W325: Ignoring swapfile from Nvim process %d'):format(nvimpid) })
+    feed(':edit Xfile1\n')
+    local msg_expected = ('W325: Ignoring swapfile from Nvim process %d'):format(nvimpid)
+    screen:expect({ any = vim.pesc(msg_expected) })
+    eq(msg_expected, n.exec_capture('messages'))
+    command('bwipe!')
+
+    -- With smaller screen, the message should be truncated, but only in display.
+    screen:try_resize(40, 18)
+    feed(':edit Xfile1\n')
+    screen:expect([[
+      ^                                        |
+      {1:~                                       }|*16
+      {19:W325: Ignoring swapfile from Nvim proces}|
+    ]])
+    eq(('\n' .. msg_expected):rep(2):sub(2), n.exec_capture('messages'))
+    command('bwipe!')
+
+    -- Also test with 'ruler'.
+    screen:try_resize(60, 18)
+    command('set ruler')
+    feed(':edit Xfile1\n')
+    screen:expect([[
+      ^                                                            |
+      {1:~                                                           }|*16
+      {19:W325: Ignoring swapfile from Nvim process }0,0-1         All |
+    ]])
+    eq(('\n' .. msg_expected):rep(3):sub(2), n.exec_capture('messages'))
+    command('bwipe!')
+
     nvim1:close()
+  end)
+
+  it('attention message kind', function()
+    exec(init)
+    command('edit Xfile1')
+    command('preserve') -- Make sure the swap file exists.
+
+    local screen = Screen.new(nil, nil, { ext_messages = true })
+    local nvim = n.new_session(true)
+    set_session(nvim)
+    screen:attach()
+    exec(init)
+    command('edit Xfile1')
+    command('autocmd! nvim.swapfile') -- Delete the default handler (which skips the dialog).
+    command('edit Xfile2 | bunload 1') -- Unload to get non-prompt attention message.
+    command('silent! call bufload("Xfile1")')
+    screen:expect({
+      condition = function()
+        for _, msg in pairs(screen.messages) do
+          local ok = msg.content[1][2]:match('W325')
+          eq(true, ok and msg.kind == 'echomsg' or msg.kind == 'wmsg')
+          eq(true, (ok or msg.content[1][2]:match('Found a swap.*If you did')) ~= nil)
+        end
+        screen.messages = {}
+      end,
+      cmdline = {
+        { content = { { '' } }, hl = 'MoreMsg', pos = 0, prompt = 'Press any key to continue' },
+      },
+    })
+    nvim:close()
   end)
 
   -- oldtest: Test_swap_prompt_splitwin()

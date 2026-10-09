@@ -218,6 +218,25 @@ int simplify_key(const int key, int *modifiers)
   return key;
 }
 
+/// Inverse of simplify_key().
+int unsimplify_key(const int c, int *modifiers)
+  FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ALL
+{
+  if (!IS_SPECIAL(c)) {
+    return c;
+  }
+
+  for (int i = 0; modifier_keys_table[i] != NUL; i += MOD_KEYS_ENTRY_SIZE) {
+    if (KEY2TERMCAP0(c) == (int)modifier_keys_table[i + 1]
+        && (int)KEY2TERMCAP1(c) == (int)modifier_keys_table[i + 2]) {
+      *modifiers |= modifier_keys_table[i];
+      return TERMCAP2KEY(modifier_keys_table[i + 3], modifier_keys_table[i + 4]);
+    }
+  }
+
+  return c;
+}
+
 /// Change <xKey> to <Key>
 int handle_x_keys(const int key)
   FUNC_ATTR_CONST FUNC_ATTR_WARN_UNUSED_RESULT
@@ -274,17 +293,7 @@ char *get_special_key_name(int c, int modifiers)
 
   // Translate shifted special keys into unshifted keys and set modifier.
   // Same for CTRL and ALT modifiers.
-  if (IS_SPECIAL(c)) {
-    for (int i = 0; modifier_keys_table[i] != 0; i += MOD_KEYS_ENTRY_SIZE) {
-      if (KEY2TERMCAP0(c) == (int)modifier_keys_table[i + 1]
-          && (int)KEY2TERMCAP1(c) == (int)modifier_keys_table[i + 2]) {
-        modifiers |= modifier_keys_table[i];
-        c = TERMCAP2KEY(modifier_keys_table[i + 3],
-                        modifier_keys_table[i + 4]);
-        break;
-      }
-    }
-  }
+  c = unsimplify_key(c, &modifiers);
 
   // try to find the key in the special key table
   int table_idx = find_special_key_in_table(c);
@@ -635,11 +644,16 @@ int get_mouse_button(int code, bool *is_click, bool *is_drag)
   return 0;         // Shouldn't get here
 }
 
-/// Replace any terminal code strings with the equivalent internal representation.
+/// Encode `<key>` notation into Nvim's internal key representation. (Does NOT process raw terminal
+/// escape sequences, despite the legacy "termcode" terminology.)
 ///
-/// Used for the "from" and "to" part of a mapping, and the "to" part of a menu command.
-/// Any strings like "<C-UP>" are also replaced, unless `special` is false.
-/// K_SPECIAL by itself is replaced by K_SPECIAL KS_SPECIAL KE_FILLER.
+/// Parses keycode notation like `<C-Up>`, `<CR>`, `<Esc>`, `<F1>`, `<Leader>`, `<SID>`, and emits
+/// the corresponding K_SPECIAL byte sequences. Used for the lhs/rhs of mappings, the rhs of menu
+/// commands, and feedkeys input. K_SPECIAL by itself is replaced by K_SPECIAL KS_SPECIAL KE_FILLER.
+///
+/// Also handles `<C-v>` / backslash literal escapes (per 'cpoptions'), `<Leader>`/`<LocalLeader>`
+/// expansion, `<SID>` script-id substitution, and (unless REPTERM_NO_SIMPLIFY) simplifications like
+/// `<C-H>` => 0x08.
 ///
 /// When "flags" has REPTERM_FROM_PART, trailing <C-v> is included, otherwise it is removed (to make
 /// ":map xx ^V" map xx to nothing). When cpo_val contains CPO_BSLASH, a backslash can be used in

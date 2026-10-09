@@ -41,34 +41,34 @@ local function starsetf(ft, priority)
 end
 
 --- Get a line range from the buffer.
----@param bufnr integer The buffer to get the lines from
+---@param buf integer The buffer to get the lines from
 ---@param start_lnum integer|nil The line number of the first line (inclusive, 1-based)
 ---@param end_lnum integer|nil The line number of the last line (inclusive, 1-based)
 ---@return string[] # Array of lines
-function M._getlines(bufnr, start_lnum, end_lnum)
-  if not bufnr or bufnr < 0 then
+function M._getlines(buf, start_lnum, end_lnum)
+  if not buf or buf < 0 then
     return {}
   end
 
   if start_lnum then
-    return api.nvim_buf_get_lines(bufnr, start_lnum - 1, end_lnum or start_lnum, false)
+    return api.nvim_buf_get_lines(buf, start_lnum - 1, end_lnum or start_lnum, false)
   end
 
   -- Return all lines
-  return api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  return api.nvim_buf_get_lines(buf, 0, -1, false)
 end
 
 --- Get a single line from the buffer.
----@param bufnr integer The buffer to get the lines from
+---@param buf integer The buffer to get the lines from
 ---@param start_lnum integer The line number of the first line (inclusive, 1-based)
 ---@return string
-function M._getline(bufnr, start_lnum)
-  if not bufnr or bufnr < 0 then
+function M._getline(buf, start_lnum)
+  if not buf or buf < 0 then
     return ''
   end
 
   -- Return a single line
-  return api.nvim_buf_get_lines(bufnr, start_lnum - 1, start_lnum, false)[1] or ''
+  return api.nvim_buf_get_lines(buf, start_lnum - 1, start_lnum, false)[1] or ''
 end
 
 --- Check whether a string matches any of the given Lua patterns.
@@ -90,17 +90,52 @@ end
 
 --- Get the next non-whitespace line in the buffer.
 ---
----@param bufnr integer The buffer to get the line from
+---@param buf integer The buffer to get the line from
 ---@param start_lnum integer The line number of the first line to start from (inclusive, 1-based)
 ---@return string|nil line The first non-blank line if found or `nil` otherwise
 ---@return integer|nil lnum The line number of the first non-blank line or `nil`
-function M._nextnonblank(bufnr, start_lnum)
-  for off, line in ipairs(M._getlines(bufnr, start_lnum, -1)) do
+function M._nextnonblank(buf, start_lnum)
+  for off, line in ipairs(M._getlines(buf, start_lnum, -1)) do
     if not line:find('^%s*$') then
       return line, start_lnum + off - 1
     end
   end
   return nil, nil
+end
+
+--- Gets a best-effort set of all "known" filetypes, discovered by:
+--- - `getcompletion()`
+--- - `vim.filetype` internal registry
+--- @return table<string,true>
+function M._get_known_filetypes()
+  local known = {} --- @type table<string,true>
+  for _, ft in ipairs(vim.fn.getcompletion('', 'filetype')) do
+    known[ft] = true
+  end
+  local registry = vim.filetype.inspect()
+
+  local function add_filetype(value)
+    local filetype = type(value) == 'table' and value[1] or value
+    if type(filetype) == 'string' then
+      known[filetype] = true
+    end
+  end
+
+  for _, value in pairs(registry.extension) do
+    add_filetype(value)
+  end
+
+  for _, value in pairs(registry.filename) do
+    add_filetype(value)
+  end
+
+  for _, mappings in pairs(registry.pattern) do
+    for _, value in pairs(mappings) do
+      add_filetype(value)
+    end
+  end
+
+  return known
 end
 
 do
@@ -3293,6 +3328,22 @@ end
 --- @return string|boolean|integer: Option value
 function M.get_option(filetype, option)
   return require('vim.filetype.options').get_option(filetype, option)
+end
+
+--- Inspect the current state of the filetype registry.
+---
+--- Returns a copy of the internal tables used for filetype detection by extension, filename, or
+--- pattern. Note: Due to the dynamic nature of filetype detection, this is only useful for checking
+--- whether a certain extension, filename, or pattern has been registered so far. In addition, the
+--- `pattern` table is in an internal format optimized for fast lookup. Prefer |vim.filetype.match()|
+--- for checking the detected filetype for a given pattern.
+---@return table<string, table<string, vim.filetype.mapping|table<string, vim.filetype.mapping>>>
+function M.inspect()
+  return {
+    extension = vim.deepcopy(extension),
+    filename = vim.deepcopy(filename),
+    pattern = vim.deepcopy(pattern),
+  }
 end
 
 return M

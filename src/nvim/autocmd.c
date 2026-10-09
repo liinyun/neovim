@@ -1874,8 +1874,8 @@ bool apply_autocmds_group(event_T event, char *fname, char *fname_io, bool force
   filechangeshell_busy = (event == EVENT_FILECHANGEDSHELL);
   nesting++;  // see matching decrement below
 
-  // Remember that FileType was triggered.  Used for did_filetype().
-  if (event == EVENT_FILETYPE) {
+  // Remember that FileType was triggered, if 'filetype' was actually set.  For :setf.
+  if (event == EVENT_FILETYPE && *curbuf->b_p_ft != NUL) {
     curbuf->b_did_filetype = true;
   }
 
@@ -2684,11 +2684,6 @@ void do_autocmd_uienter(uint64_t chanid, bool attached)
 {
   static bool recursive = false;
 
-#ifdef EXITFREE
-  if (entered_free_all_mem) {
-    return;
-  }
-#endif
   if (starting == NO_SCREEN) {
     return;  // user config hasn't been sourced yet
   }

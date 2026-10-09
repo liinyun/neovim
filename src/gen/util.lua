@@ -20,6 +20,7 @@ end
 -- Map of api_level:version, by inspection of:
 --    :lua= vim.mpack.decode(vim.fn.readfile('test/functional/fixtures/api_level_9.mpack','B')).version
 M.version_level = {
+  [15] = '0.13.0',
   [14] = '0.12.0',
   [13] = '0.11.0',
   [12] = '0.10.0',
@@ -401,6 +402,19 @@ function M.md_to_vimdoc(text, start_indent, indent, text_width, is_list)
   s = s:gsub('\n+%s*>\n?\n', ' >\n')
 
   return s
+end
+
+--- Sorts a list in-place, with underscore-prefixed names last (e.g. "_cmdline_offset").
+--- If `key` is given, sorts by `item[key]`; otherwise sorts by value.
+---
+--- @param t any[]
+--- @param key? string
+function M.sort_by_key(t, key)
+  table.sort(t, function(a, b)
+    local a_val = key and a[key] or a
+    local b_val = key and b[key] or b
+    return a_val:gsub('^_', '~') < b_val:gsub('^_', '~')
+  end)
 end
 
 return M

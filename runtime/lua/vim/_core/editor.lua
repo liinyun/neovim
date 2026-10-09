@@ -302,8 +302,6 @@ vim.funcref = function(viml_func_name)
   return vim.fn[viml_func_name]
 end
 
-local VIM_CMD_ARG_MAX = 20
-
 --- Executes Vimscript (|Ex-command|s).
 ---
 --- Can be indexed with a command name to get a function, thus you can write `vim.cmd.echo(…)`
@@ -342,23 +340,23 @@ local VIM_CMD_ARG_MAX = 20
 --- ```
 ---
 ---@diagnostic disable-next-line: undefined-doc-param
----@param command string|table Command(s) to execute.
+---@param cmd string|table Command(s) to execute.
 ---       - The string form supports multiline Vimscript (alias to |nvim_exec2()|, behaves
 ---         like |:source|).
 ---       - The table form executes a single command (alias to |nvim_cmd()|).
 ---@see |ex-cmd-index|
 vim.cmd = setmetatable({}, {
-  __call = function(_, command)
-    if type(command) == 'table' then
-      return vim.api.nvim_cmd(command, {})
+  __call = function(_, cmd)
+    if type(cmd) == 'table' then
+      return vim.api.nvim_cmd(cmd, {})
     else
-      vim.api.nvim_exec2(command, {})
+      vim.api.nvim_exec2(cmd, {})
       return ''
     end
   end,
   --- @param t table<string,function>
-  __index = function(t, command)
-    t[command] = function(...)
+  __index = function(t, cmd)
+    t[cmd] = function(...)
       local opts --- @type vim.api.keyset.cmd
       if select('#', ...) == 1 and type(select(1, ...)) == 'table' then
         --- @type vim.api.keyset.cmd
@@ -367,7 +365,7 @@ vim.cmd = setmetatable({}, {
         -- Move indexed positions in opts to opt.args
         if opts[1] and not opts.args then
           opts.args = {}
-          for i = 1, VIM_CMD_ARG_MAX do
+          for i = 1, #opts do
             if not opts[i] then
               break
             end
@@ -379,10 +377,10 @@ vim.cmd = setmetatable({}, {
       else
         opts = { args = { ... } }
       end
-      opts.cmd = command
+      opts.cmd = cmd
       return vim.api.nvim_cmd(opts, {})
     end
-    return t[command]
+    return t[cmd]
   end,
 })
 
@@ -547,7 +545,11 @@ end
 ---@diagnostic disable-next-line: unused-local
 function vim.notify(msg, level, opts) -- luacheck: no unused args
   local chunks = { { msg, level == vim.log.levels.WARN and 'WarningMsg' or nil } }
-  vim.api.nvim_echo(chunks, true, { err = level == vim.log.levels.ERROR })
+  vim.api.nvim_echo(
+    chunks,
+    true,
+    { err = level == vim.log.levels.ERROR, _truncate = opts and opts._truncate }
+  )
 end
 
 do
@@ -1213,9 +1215,7 @@ end
 do
   local function truncated_echo(msg)
     -- Truncate message to avoid hit-enter-prompt
-    local max_width = vim.o.columns * math.max(vim.o.cmdheight - 1, 0) + vim.v.echospace
-    local msg_truncated = string.sub(msg, 1, max_width)
-    vim.api.nvim_echo({ { msg_truncated, 'WarningMsg' } }, true, {})
+    vim.api.nvim_echo({ { msg, 'WarningMsg' } }, true, { _truncate = true })
   end
 
   local notified = false

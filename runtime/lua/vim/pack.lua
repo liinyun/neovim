@@ -12,7 +12,8 @@
 ---
 ---Uses Git to manage plugins and requires present `git` executable.
 ---Target plugins should be Git repositories with versions as named tags
----following semver convention `v<major>.<minor>.<patch>`.
+---following semver convention `v<major>.<minor>.<patch>` (with or without `v` prefix).
+---Like `v1.2.0` or `1.2.0`, but not `1.2` or `v1`.
 ---
 ---The latest state of all managed plugins is stored inside a [vim.pack-lockfile]()
 ---located at `$XDG_CONFIG_HOME/nvim/nvim-pack-lock.json`. It is a JSON file that
@@ -138,7 +139,9 @@
 ---- On secondary machine:
 ---     - Pull from the server.
 ---     - |:restart|. New plugins (not present locally, but present in the lockfile)
----       are installed at proper revision.
+---       are installed at proper revision. If some installation has failed but
+---       you know it should not (like due to bad Internet connection),
+---       revert |vim.pack-lockfile| and |:restart| again.
 ---     - `vim.pack.update(nil, { target = 'lockfile' })`. Read and confirm.
 ---     - Manually delete outdated plugins (present locally, but were not present
 ---       in the lockfile prior to restart) with `vim.pack.del( { 'plugin' })`.
@@ -165,13 +168,15 @@
 ---- [PackChangedPre]() - before trying to change plugin's state.
 ---- [PackChanged]() - after plugin's state has changed.
 ---
----Each event populates the following |event-data| fields:
+---The |event-data| has these keys (type: `vim.event.packchanged.data`):
 ---- `active` - whether plugin was added via |vim.pack.add()| to current session.
 ---- `kind` - one of "install" (install on disk; before loading),
 ---  "update" (update already installed plugin; might be not loaded),
 ---  "delete" (delete from disk).
 ---- `spec` - plugin's specification with defaults made explicit.
 ---- `path` - full path to plugin's directory.
+---
+---See `vim.event.packchanged.data` and `vim.event.packchangedpre.data`.
 ---
 --- These events can be used to execute plugin hooks. For example:
 ---```lua
@@ -241,16 +246,20 @@ local function git_cmd(cmd, cwd)
   local sys_opts = { cwd = cwd, text = true, env = env, clear_env = true }
   local out = async.await(3, vim.system, cmd, sys_opts) --- @type vim.SystemCompleted
   async.await(1, vim.schedule)
+  local stderr = out.stderr or ''
   if out.code ~= 0 then
-    error(out.stderr)
+    error(stderr)
   end
-  local stdout, stderr = assert(out.stdout), assert(out.stderr)
   if stderr ~= '' then
     vim.schedule(function()
       vim.notify(stderr:gsub('\n+$', ''), vim.log.levels.WARN)
     end)
   end
-  return (stdout:gsub('\n+$', ''))
+  return (assert(out.stdout):gsub('\n+$', ''))
+end
+
+local function parse_semver(x)
+  return vim.version.parse(x, { strict = true })
 end
 
 --- @type vim.Version
@@ -272,7 +281,7 @@ local function git_clone(url, path)
 
   if vim.startswith(url, 'file://') then
     cmd[#cmd + 1] = '--no-hardlinks'
-  elseif git_version >= vim.version.parse('2.27') then
+  elseif git_version >= parse_semver('2.27.0') then
     cmd[#cmd + 1] = '--filter=blob:none'
   end
 
@@ -341,7 +350,7 @@ end
 --- @param x string
 --- @return boolean
 local function is_semver(x)
-  return vim.version.parse(x) ~= nil
+  return parse_semver(x) ~= nil
 end
 
 local function is_nonempty_string(x)
@@ -583,7 +592,7 @@ end
 local function get_last_semver_tag(tags, version_range)
   local last_tag, last_ver_tag --- @type string, vim.Version
   for _, tag in ipairs(tags) do
-    local ver_tag = vim.version.parse(tag)
+    local ver_tag = parse_semver(tag)
     if ver_tag then
       if version_range:has(ver_tag) and (not last_ver_tag or ver_tag > last_ver_tag) then
         last_tag, last_ver_tag = tag, ver_tag
@@ -664,18 +673,21 @@ local function checkout(p, timestamp, skip_stash)
   infer_revisions(p)
 
   if not skip_stash then
-    local stash_cmd = { 'stash', '--quiet' }
-    if git_version > vim.version.parse('2.13') then
+    local stash_cmd = { 'stash' }
+    if git_version > parse_semver('2.13.0') then
+      -- Use 'push' to avoid a 'stash -m' bug in versions prior to git v2.26
+      stash_cmd[#stash_cmd + 1] = 'push'
       stash_cmd[#stash_cmd + 1] = '--message'
       stash_cmd[#stash_cmd + 1] = ('vim.pack: %s Stash before checkout'):format(timestamp)
     end
+    stash_cmd[#stash_cmd + 1] = '--quiet'
     git_cmd(stash_cmd, p.path)
   end
 
   git_cmd({ 'checkout', '--quiet', p.info.sha_target }, p.path)
 
   local submodule_cmd = { 'submodule', 'update', '--init', '--recursive' }
-  if git_version >= vim.version.parse('2.36') then
+  if git_version >= parse_semver('2.36.0') then
     submodule_cmd[#submodule_cmd + 1] = '--filter=blob:none'
   end
   git_cmd(submodule_cmd, p.path)
@@ -755,7 +767,7 @@ local function infer_update_details(p)
   end
 
   local older_tags = ''
-  if git_version >= vim.version.parse('2.13') then
+  if git_version >= parse_semver('2.13.0') then
     older_tags = git_cmd({ 'tag', '--list', '--no-contains', sha_head }, p.path)
   end
   local cur_tags = git_cmd({ 'tag', '--list', '--points-at', sha_head }, p.path)
@@ -918,7 +930,6 @@ local function lock_sync(confirm, specs)
     end)
     git_ensure_exec()
     install_list(to_install, confirm)
-    lock_write()
   end
 
   if #to_repair > 0 then
@@ -1155,7 +1166,7 @@ local function show_confirm_buf(lines, on_finish)
     delete_buffer()
   end
   -- - Use `nested` to allow other events (useful for statuslines)
-  api.nvim_create_autocmd('BufWriteCmd', { buffer = bufnr, nested = true, callback = finish })
+  api.nvim_create_autocmd('BufWriteCmd', { buf = bufnr, nested = true, callback = finish })
 
   -- Define action to cancel confirm
   --- @type integer

@@ -337,14 +337,20 @@ static void tui_reset_key_encoding(TUIData *tui)
   }
 }
 
+static void tui_query_bg_color_noflush(TUIData *tui)
+  FUNC_ATTR_NONNULL_ALL
+{
+  out(tui, S_LEN("\x1b]11;?\x07\x1b[5n"));
+}
+
 /// Write the OSC 11 + DSR sequence to the terminal emulator to query the current
-/// background color.
+/// background color, and flush the terminal.
 ///
 /// Response will be handled by the TermResponse handler in _core/defaults.lua.
 void tui_query_bg_color(TUIData *tui)
   FUNC_ATTR_NONNULL_ALL
 {
-  out(tui, S_LEN("\x1b]11;?\x07\x1b[5n"));
+  tui_query_bg_color_noflush(tui);
   flush_buf(tui);
 }
 
@@ -482,6 +488,11 @@ static void terminfo_start(TUIData *tui)
 
   // Query the terminal to see if it supports Kitty's keyboard protocol
   tui_query_kitty_keyboard(tui);
+
+  // Query the terminal's background color. We normally get it via continuous reporting (set via
+  // `kTermModeThemeUpdates` above), but if we were backgrounded while the light/dark mode changed,
+  // we won't have received the report, so we also query it on resume.
+  tui_query_bg_color_noflush(tui);
 
   int ret;
   uv_loop_init(&tui->write_loop);
@@ -2070,6 +2081,7 @@ static void patch_terminfo_bugs(TUIData *tui, const char *term, const char *colo
                                && strstr(colorterm, "mate-terminal");
   bool true_xterm = xterm && !!xterm_version && !bsdvt;
   bool cygwin = terminfo_is_term_family(term, "cygwin");
+  bool ghostty = terminfo_is_term_family(term, "xterm-ghostty");
 
   const char *fix_normal = tui->ti.defs[kTerm_cursor_normal];
   if (fix_normal) {
@@ -2145,6 +2157,13 @@ static void patch_terminfo_bugs(TUIData *tui, const char *term, const char *colo
     // 2017-04 terminfo.src has older control sequences.
     terminfo_set_str(tui, kTerm_enter_ca_mode, "\x1b[?1049h");
     terminfo_set_str(tui, kTerm_exit_ca_mode, "\x1b[?1049l");
+    // rxvt-unicode has a default steady block cursor, though there's an option
+    // to initialize it with an underline https://cvs.schmorp.de/rxvt-unicode/src/init.C?revision=1.351&view=markup#l727
+    // \x1b[0 q doesn't work because it makes it a blinking block https://cvs.schmorp.de/rxvt-unicode/src/command.C?revision=1.605&view=markup#l4122
+    // We can't really account for that, so just set it to steady block and hope
+    // for the best.
+    terminfo_set_str(tui, kTerm_reset_cursor_style, "\x1b[2 q");
+    terminfo_set_str(tui, kTerm_set_cursor_style, "\x1b[%p1%d q");
   } else if (screen) {
     // per the screen manual; 2017-04 terminfo.src lacks these.
     terminfo_set_if_empty(tui, kTerm_to_status_line, "\x1b_");
@@ -2229,74 +2248,57 @@ static void patch_terminfo_bugs(TUIData *tui, const char *term, const char *colo
   // Dickey ncurses terminfo includes Ss/Se capabilities since 2011-07-14. So
   // adding them to terminal types, that have such control sequences but lack
   // the correct terminfo entries, is a fixup, not an augmentation.
-  if (tui->ti.defs[kTerm_set_cursor_style] == NULL) {
-    // DECSCUSR (cursor shape) is widely supported.
-    // https://github.com/gnachman/iTerm2/pull/92
-    if ((!bsdvt && (!konsolev || konsolev >= 180770))
-        && ((xterm && !vte_version)  // anything claiming xterm compat
-            // per MinTTY 0.4.3-1 release notes from 2009
-            || putty
-            // per https://chromium.googlesource.com/apps/libapps/+/a5fb83c190aa9d74f4a9bca233dac6be2664e9e9/hterm/doc/ControlSequences.md
-            || hterm
-            // per https://bugzilla.gnome.org/show_bug.cgi?id=720821
-            || (vte_version >= 3900)
-            || (konsolev >= 180770)  // #9364
-            || tmux       // per tmux manual page
-            // https://lists.gnu.org/archive/html/screen-devel/2013-03/msg00000.html
-            || screen
-            || st         // #7641
-            || rxvt       // per command.C
-            // per analysis of VT100Terminal.m
-            || iterm || iterm_pretending_xterm
-            || teraterm   // per TeraTerm "Supported Control Functions" doco
-            || alacritty  // https://github.com/jwilm/alacritty/pull/608
-            || cygwin
-            || foot
-            // Some linux-type terminals implement the xterm extension.
-            // Example: console-terminal-emulator from the nosh toolset.
-            || (linuxvt
-                && (xterm_version || (vte_version > 0) || colorterm)))) {
-      terminfo_set_str(tui, kTerm_set_cursor_style, "\x1b[%p1%d q");
-      terminfo_set_str(tui, kTerm_reset_cursor_style, "\x1b[ q");
-    } else if (linuxvt) {
-      // Linux uses an idiosyncratic escape code to set the cursor shape and
-      // does not support DECSCUSR.
-      // See http://linuxgazette.net/137/anonymous.html for more info
-      terminfo_set_str(tui, kTerm_set_cursor_style,
-                       "\x1b[?"
-                       "%?"
-                       // The parameter passed to Ss is the DECSCUSR parameter, so the
-                       // terminal capability has to translate into the Linux idiosyncratic
-                       // parameter.
-                       //
-                       // linuxvt only supports block and underline. It is also only
-                       // possible to have a steady block (no steady underline)
-                       "%p1%{2}%<" "%t%{8}"       // blink block
-                       "%e%p1%{2}%=" "%t%{112}"   // steady block
-                       "%e%p1%{3}%=" "%t%{4}"     // blink underline (set to half block)
-                       "%e%p1%{4}%=" "%t%{4}"     // steady underline
-                       "%e%p1%{5}%=" "%t%{2}"     // blink bar (set to underline)
-                       "%e%p1%{6}%=" "%t%{2}"     // steady bar
-                       "%e%{0}"                   // anything else
-                       "%;" "%dc");
-      terminfo_set_str(tui, kTerm_reset_cursor_style, "\x1b[?c");
-    } else if (konsolev > 0 && konsolev < 180770) {
-      // Konsole before version 18.07.70: set up a nonce profile. This has
-      // side effects on temporary font resizing. #6798
-      terminfo_set_str(tui, kTerm_set_cursor_style,
-                       TMUX_WRAP(tmux,
-                                 "\x1b]50;CursorShape=%?"
-                                 "%p1%{3}%<" "%t%{0}"    // block
-                                 "%e%p1%{5}%<" "%t%{2}"  // underline
-                                 "%e%{1}"                // everything else is bar
-                                 "%;%d;BlinkingCursorEnabled=%?"
-                                 "%p1%{1}%<" "%t%{1}"  // Fortunately if we exclude zero as special,
-                                 "%e%p1%{1}%&"  // in all other cases we can treat bit #0 as a flag.
-                                 "%;%d\x07"));
-      terminfo_set_str(tui, kTerm_reset_cursor_style, "\x1b]50;\x07");
-    } else {
-      tui->ti.defs[kTerm_reset_cursor_style] = NULL;
-    }
+  // DECSCUSR (cursor shape) is widely supported.
+  // https://github.com/gnachman/iTerm2/pull/92
+  if (!bsdvt
+      && (xterm         // anything claiming xterm compat
+          // per MinTTY 0.4.3-1 release notes from 2009
+          || putty
+          // per https://chromium.googlesource.com/apps/libapps/+/a5fb83c190aa9d74f4a9bca233dac6be2664e9e9/hterm/doc/ControlSequences.md
+          || hterm
+          // per https://bugzilla.gnome.org/show_bug.cgi?id=720821
+          || vte_version
+          || konsolev   // #9364
+          || tmux       // per tmux manual page
+          // https://lists.gnu.org/archive/html/screen-devel/2013-03/msg00000.html
+          || screen
+          || st         // #7641
+          // https://github.com/gnachman/iTerm2/pull/651
+          || iterm || iterm_pretending_xterm
+          || teraterm   // per TeraTerm "Supported Control Functions" doco
+          || alacritty  // https://github.com/jwilm/alacritty/pull/608
+          || cygwin
+          || foot
+          || kitty      // https://github.com/kovidgoyal/kitty/pull/9929
+          || ghostty    // https://github.com/ghostty-org/ghostty/pull/12487
+          // Some linux-type terminals implement the xterm extension.
+          // Example: console-terminal-emulator from the nosh toolset.
+          || (linuxvt
+              && (xterm_version || colorterm)))) {
+    terminfo_set_str(tui, kTerm_set_cursor_style, "\x1b[%p1%d q");
+    terminfo_set_str(tui, kTerm_reset_cursor_style, "\x1b[0 q");
+  } else if (linuxvt) {
+    // Linux uses an idiosyncratic escape code to set the cursor shape and
+    // does not support DECSCUSR.
+    // See http://linuxgazette.net/137/anonymous.html for more info
+    terminfo_set_str(tui, kTerm_set_cursor_style,
+                     "\x1b[?"
+                     "%?"
+                     // The parameter passed to Ss is the DECSCUSR parameter, so the
+                     // terminal capability has to translate into the Linux idiosyncratic
+                     // parameter.
+                     //
+                     // linuxvt only supports block and underline. It is also only
+                     // possible to have a steady block (no steady underline)
+                     "%p1%{2}%<" "%t%{8}"       // blink block
+                     "%e%p1%{2}%=" "%t%{112}"   // steady block
+                     "%e%p1%{3}%=" "%t%{4}"     // blink underline (set to half block)
+                     "%e%p1%{4}%=" "%t%{4}"     // steady underline
+                     "%e%p1%{5}%=" "%t%{2}"     // blink bar (set to underline)
+                     "%e%p1%{6}%=" "%t%{2}"     // steady bar
+                     "%e%{0}"                   // anything else
+                     "%;" "%dc");
+    terminfo_set_str(tui, kTerm_reset_cursor_style, "\x1b[?c");
   }
 
   xfree(xterm_version);

@@ -73,21 +73,21 @@ setmetatable(Completor, Capability)
 Capability.all[Completor.name] = Completor
 
 ---@package
----@param bufnr integer
+---@param buf integer
 ---@return vim.lsp.inline_completion.Completor
-function Completor:new(bufnr)
-  self = Capability.new(self, bufnr)
+function Completor:new(buf)
+  self = Capability.new(self, buf)
   self.client_state = {}
   api.nvim_create_autocmd({ 'InsertEnter', 'CursorMovedI', 'TextChangedP' }, {
     group = self.augroup,
-    buffer = bufnr,
+    buf = buf,
     callback = function()
       self:automatic_request()
     end,
   })
   api.nvim_create_autocmd({ 'InsertLeave' }, {
     group = self.augroup,
-    buffer = bufnr,
+    buf = buf,
     callback = function()
       self:abort()
     end,
@@ -223,7 +223,8 @@ function Completor:show(hint)
   if current.range then
     row, col = current.range:to_extmark()
   else
-    row, col = vim.pos.cursor(api.nvim_win_get_cursor(vim.fn.bufwinid(self.bufnr))):to_extmark()
+    row, col =
+      vim.pos.cursor(self.bufnr, api.nvim_win_get_cursor(vim.fn.bufwinid(self.bufnr))):to_extmark()
   end
 
   -- To ensure that virtual text remains visible continuously (without flickering)
@@ -245,7 +246,7 @@ function Completor:show(hint)
   -- At least, characters before the cursor should be skipped.
   if api.nvim_win_get_buf(winid) == self.bufnr then
     local cursor_row, cursor_col =
-      vim.pos.cursor(api.nvim_win_get_cursor(winid), { buf = self.bufnr }):to_extmark()
+      vim.pos.cursor(self.bufnr, api.nvim_win_get_cursor(winid)):to_extmark()
     if row == cursor_row then
       skip = math.max(skip, cursor_col - col + 1)
     end

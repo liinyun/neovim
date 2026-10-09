@@ -1466,6 +1466,10 @@ static void win_update(win_T *wp)
   }
   buf->b_signcols.last_max = buf->b_signcols.max;
 
+  // Validate w_virtcol here as it can change the redraw type.
+  validate_virtcol(wp);
+  type = wp->w_redr_type;
+
   init_search_hl(wp, &screen_search_hl);
 
   // Make sure skipcol is valid, it depends on various options and the window
@@ -2323,6 +2327,8 @@ redr_statuscol:
   wp->w_last_cursor_lnum_rnu = wp->w_p_rnu ? wp->w_cursor.lnum : 0;
 
   wp->w_lines_valid = MAX(wp->w_lines_valid, idx);
+
+  wp->w_display_tick = display_tick;
 
   // Let the syntax stuff know we stop parsing here.
   if (syntax_last_parsed != 0 && syntax_present(wp)) {

@@ -181,6 +181,19 @@ describe('treesitter highlighting (C)', function()
     -- treesitter highlighting is used
     screen:expect(hl_grid_ts_c)
 
+    -- A second start() on an already-highlighted buffer is a no-op: it returns the existing
+    -- highlighter instead of replacing it (replacing it would leak the old instance's
+    -- on_bytes/on_changedtree callbacks, since destroy() is never called on it).
+    eq(
+      true,
+      exec_lua(function()
+        local buf = vim.api.nvim_get_current_buf()
+        local first = vim.treesitter.highlighter.active[buf]
+        vim.treesitter.start()
+        return first == vim.treesitter.highlighter.active[buf]
+      end)
+    )
+
     exec_lua(function()
       vim.treesitter.stop()
     end)
@@ -1492,4 +1505,31 @@ mispelledtwo]])
 
   local pos = api.nvim_win_get_cursor(0)
   eq(1, pos[1], 'Should have wrapped back to Line 1')
+end)
+
+it('conceals lines contributed by an injected tree', function()
+  clear()
+  command('set conceallevel=3')
+
+  -- Measured without an intervening redraw, so that the conceal_line callback
+  -- is the thing that has to parse the injection. The outer ~~~ fences come
+  -- from the root tree, the inner ``` fences from the markdown tree injected
+  -- into it; all four carry conceal_lines, leaving "filler", "print(1)" and
+  -- "tail" on screen.
+  eq(
+    3,
+    exec_lua(function()
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+        'filler',
+        '~~~markdown',
+        '```lua',
+        'print(1)',
+        '```',
+        '~~~',
+        'tail',
+      })
+      vim.treesitter.start(0, 'markdown')
+      return vim.api.nvim_win_text_height(0, {}).all
+    end)
+  )
 end)

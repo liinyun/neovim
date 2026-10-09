@@ -1130,4 +1130,64 @@ describe('statuscolumn', function()
                                                            |
     ]])
   end)
+
+  it('does not break wrapping at unprintable chars #41198', function()
+    command([[let &statuscolumn = repeat(' ', 4)]])
+    api.nvim_buf_set_lines(0, 0, -1, true, { ('\1'):rep(100), 'foo', 'bar' })
+    command('normal! zb')
+    screen:expect([[
+      {8:    }{18:^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^}|
+      {8:    }{18:A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A}|
+      {8:    }{18:^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^}|
+      {8:    }{18:A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A^A}|
+      {8:    }{18:^A^A}                                             |
+      {8:    }foo                                              |
+      {8:    }^bar                                              |
+      {1:~                                                    }|*6
+                                                           |
+    ]])
+  end)
+
+  describe('no heap-buffer-overflow with', function()
+    it('%s after many items #41630', function()
+      exec([[
+        set nonumber signcolumn=yes
+        let &statuscolumn = repeat('%=', 99) .. '%s'
+      ]])
+      screen:expect([[
+        {7:  }aaaaa                                              |*4
+        {7:  }^aaaaa                                              |
+        {7:  }aaaaa                                              |*8
+                                                             |
+      ]])
+      assert_alive()
+    end)
+
+    it('%l after many items', function()
+      exec([[
+        func Statuscolumn()
+          return repeat('%=', v:relnum == 0 ? 149 : 99) .. '%l '
+        endfunc
+        set number numberwidth=4 relativenumber
+        set statuscolumn=%!Statuscolumn()
+      ]])
+      screen:expect([[
+        {8:  4 }aaaaa                                            |
+        {8:  3 }aaaaa                                            |
+        {8:  2 }aaaaa                                            |
+        {8:  1 }aaaaa                                            |
+        {8:8   }^aaaaa                                            |
+        {8:  1 }aaaaa                                            |
+        {8:  2 }aaaaa                                            |
+        {8:  3 }aaaaa                                            |
+        {8:  4 }aaaaa                                            |
+        {8:  5 }aaaaa                                            |
+        {8:  6 }aaaaa                                            |
+        {8:  7 }aaaaa                                            |
+        {8:  8 }aaaaa                                            |
+                                                             |
+      ]])
+      assert_alive()
+    end)
+  end)
 end)

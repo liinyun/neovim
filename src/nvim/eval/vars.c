@@ -215,6 +215,9 @@ static struct vimvar {
   VV(VV_LUA,              "lua",              VAR_PARTIAL, VV_RO),
   VV(VV_RELNUM,           "relnum",           VAR_NUMBER, VV_RO),
   VV(VV_VIRTNUM,          "virtnum",          VAR_NUMBER, VV_RO),
+  VV(VV_STARTTIME,        "starttime",        VAR_NUMBER, VV_RO),
+  VV(VV_EXITREASON,       "exitreason",       VAR_STRING, VV_RO),
+  VV(VV_STARTREASON,      "startreason",      VAR_STRING, VV_RO),
 };
 #undef VV
 
@@ -314,6 +317,7 @@ void evalvars_init(void)
   set_vim_var_nr(VV_SEARCHFORWARD, 1);
   set_vim_var_nr(VV_HLSEARCH, 1);
   set_vim_var_nr(VV_COUNT1, 1);
+  set_vim_var_string(VV_STARTREASON, S_LEN("normal"));
   set_vim_var_special(VV_EXITING, kSpecialVarNull);
 
   set_vim_var_nr(VV_TYPE_NUMBER, VAR_TYPE_NUMBER);
@@ -343,6 +347,15 @@ void evalvars_init(void)
   set_vim_var_partial(VV_LUA, vvlua_partial);
 
   set_reg_var(0);  // default for v:register is not 0 but '"'
+
+  // Set v:startreason via environment variable
+  const char *startreason = os_getenv_noalloc(ENV_STARTREASON);
+  if (strequal(startreason, "restart!") || strequal(startreason, "restart")) {
+    set_vim_var_string(VV_STARTREASON, startreason, -1);
+  }
+  if (os_env_exists(ENV_STARTREASON, false)) {
+    os_unsetenv(ENV_STARTREASON);
+  }
 }
 
 #if defined(EXITFREE)
@@ -3204,12 +3217,13 @@ static OptVal tv_to_optval(typval_T *tv, OptIndex opt_idx, const char *option, b
     // So we need to check if it's actually a number.
     if (!err && tv->v_type == VAR_STRING && n == 0) {
       unsigned idx;
-      for (idx = 0; tv->vval.v_string[idx] == '0'; idx++) {}
-      if (tv->vval.v_string[idx] != NUL || idx == 0) {
+      for (idx = 0; tv->vval.v_string != NULL && tv->vval.v_string[idx] == '0'; idx++) {}
+      if (idx == 0 || tv->vval.v_string[idx] != NUL) {
         // There's another character after zeros or the string is empty.
         // In both cases, we are trying to set a num option using a string.
         err = true;
-        semsg(_("E521: Number required: &%s = '%s'"), option, tv->vval.v_string);
+        semsg(_("E521: Number required: &%s = '%s'"), option,
+              tv->vval.v_string == NULL ? "" : tv->vval.v_string);
       }
     }
     value = option_has_num ? NUMBER_OPTVAL((OptInt)n) : BOOLEAN_OPTVAL(TRISTATE_FROM_INT(n));

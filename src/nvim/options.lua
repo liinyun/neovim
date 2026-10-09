@@ -21,7 +21,6 @@
 --- @field noglob? true
 --- @field normal_fname_chars? true
 --- @field pri_mkrc? true
---- @field deny_in_modelines? true
 --- @field normal_dname_chars? true
 --- @field modelineexpr? true
 --- @field func? true
@@ -367,7 +366,7 @@ local options = {
       desc = [=[
         When set to "dark" or "light", adjusts the default color groups for
         that background type.  The |TUI| or other UI sets this on startup
-        (triggering |OptionSet|) if it can detect the background color.
+        if it can detect the background color.
 
         This option does NOT change the background color, it tells Nvim what
         the "inherited" (terminal/GUI) background looks like.
@@ -565,8 +564,6 @@ local options = {
         The use of |:set+=| and |:set-=| is preferred when adding or removing
         directories from the list.  This avoids problems when a future version
         uses another default.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = 'nodefault',
       full_name = 'backupdir',
@@ -1051,8 +1048,6 @@ local options = {
         When on, |:cd|, |:tcd| and |:lcd| without an argument changes the
         current working directory to the |$HOME| directory like in Unix.
         When off, those commands just print the current directory name.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'cdhome',
       scope = { 'global' },
@@ -1082,8 +1077,6 @@ local options = {
         override it: >vim
           let &cdpath = ',' .. substitute(substitute($CDPATH, '[, ]', '\\\0', 'g'), ':', ',', 'g')
         <	Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
         (parts of 'cdpath' can be passed to the shell to expand file names).
       ]=],
       expand = true,
@@ -1179,9 +1172,6 @@ local options = {
         	set charconvert=<SID>SomeConvert()
         <	Otherwise the expression is evaluated in the context of the script
         where the option was set, thus script-local items are available.
-
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'charconvert',
       scope = { 'global' },
@@ -1349,8 +1339,8 @@ local options = {
       desc = [=[
         Number of screen lines to use for the command-line.  Helps avoiding
         |hit-enter| prompts.
-        The value of this option is stored with the tab page, so that each tab
-        page can have a different value.
+        The value of this option is stored with the tabpage, so that each
+        tabpage can have a different value.
 
         When 'cmdheight' is zero, there is no command-line unless it is being
         used.  The command-line will cover the last line of the screen when
@@ -1566,8 +1556,6 @@ local options = {
         invoked and what it should return.  The value can be the name of a
         function, a |lambda| or a |Funcref|.  See |option-value-function| for
         more information.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'completefunc',
       func = true,
@@ -2339,8 +2327,6 @@ local options = {
       desc = [=[
         Expression which is evaluated to obtain a diff file (either ed-style
         or unified-style) from two versions of a file.  See |diff-diffexpr|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'diffexpr',
       redraw = { 'curswant' },
@@ -2396,7 +2382,7 @@ local options = {
 
         	closeoff	When a window is closed where 'diff' is set
         			and there is only one window remaining in the
-        			same tab page with 'diff' set, execute
+        			same tabpage with 'diff' set, execute
         			`:diffoff` in that window.  This undoes a
         			`:diffsplit` command.
 
@@ -2578,9 +2564,6 @@ local options = {
         others on the computer may be able to see the files.
         Use |:set+=| and |:set-=| when adding or removing directories from the
         list, this avoids problems if the Nvim default is changed.
-
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = 'nodefault',
       full_name = 'directory',
@@ -2676,7 +2659,6 @@ local options = {
       abbreviation = 'enc',
       cb = 'did_set_encoding',
       defaults = macros('ENC_DFLT', 'string'),
-      deny_in_modelines = true,
       desc = [=[
         String-encoding used internally and for |RPC| communication.
         Always UTF-8.
@@ -2770,8 +2752,6 @@ local options = {
         or 'indentexpr'.
         Environment variables are expanded |:set_env|.  See |option-backslash|
         about including spaces and backslashes.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'equalprg',
@@ -2807,8 +2787,6 @@ local options = {
         NOT used for the ":make" command.  See 'makeef' for that.
         Environment variables are expanded |:set_env|.
         See |option-backslash| about including spaces and backslashes.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'errorfile',
@@ -2922,8 +2900,6 @@ local options = {
         3. Create ".nvim.lua" in your project root directory with this line: >lua
             vim.cmd[[set runtimepath+=.nvim]]
         <
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'exrc',
       scope = { 'global' },
@@ -3325,8 +3301,6 @@ local options = {
         It is not allowed to change text or jump to another window while
         executing the 'findfunc' |textlock|.
 
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
 
         Examples:
         >vim
@@ -3784,17 +3758,15 @@ local options = {
       abbreviation = 'fp',
       defaults = '',
       desc = [=[
-        The name of an external program that will be used to format the lines
-        selected with the |gq| operator.  The program must take the input on
-        stdin and produce the output on stdout.  The Unix program "fmt" is
-        such a program.
-        If the 'formatexpr' option is not empty it will be used instead.
-        Otherwise, if 'formatprg' option is an empty string, the internal
-        format function will be used |C-indenting|.
-        Environment variables are expanded |:set_env|.  See |option-backslash|
-        about including spaces and backslashes.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
+        External program used to format lines with |gq|. Ignored if
+        'formatexpr' is set.
+
+        If empty, the internal |C-indenting| function will be used.
+
+        The program must take input on stdin and produce output on stdout. The
+        Unix program "fmt" is such a program. Environment variables are
+        expanded |:set_env|.  See |option-backslash| about including spaces
+        and backslashes.
       ]=],
       expand = true,
       full_name = 'formatprg',
@@ -3822,8 +3794,6 @@ local options = {
 
         This is a |global-local| option, so it can be set per buffer, for
         example when writing to a slow filesystem.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'fsync',
       scope = { 'global', 'buf' },
@@ -3893,9 +3863,6 @@ local options = {
         You can make ripgrep match Vim's case handling using the
         -i/--ignore-case and -S/--smart-case options. Handle |OptionSet| to
         dynamically update 'grepprg' when e.g. 'ignorecase' is changed.
-
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'grepprg',
@@ -4155,9 +4122,9 @@ local options = {
         							*'go-d'*
           'd'	Use dark theme variant if available.
         							*'go-e'*
-          'e'	Add tab pages when indicated with 'showtabline'.
+          'e'	Add tabpages when indicated with 'showtabline'.
         	'guitablabel' can be used to change the text in the labels.
-        	When 'e' is missing a non-GUI tab pages line may be used.
+        	When 'e' is missing a non-GUI tabpages line may be used.
         	The GUI tabs are only supported on some systems, currently
         	Mac OS/X and MS-Windows.
         							*'go-i'*
@@ -4225,9 +4192,9 @@ local options = {
       abbreviation = 'gtl',
       defaults = '',
       desc = [=[
-        When non-empty describes the text to use in a label of the GUI tab
-        pages line.  When empty and when the result is empty Vim will use a
-        default label.  See |setting-guitablabel| for more info.
+        When non-empty describes the text to use in a label of the GUI
+        tabpages line.  When empty and when the result is empty Vim will use
+        a default label.  See |setting-guitablabel| for more info.
 
         The format of this option is like that of 'statusline'.
         'guitabtooltip' is used for the tooltip, see below.
@@ -4235,15 +4202,15 @@ local options = {
         modeline, see |sandbox-option|.
         This option cannot be set in a modeline when 'modelineexpr' is off.
 
-        Only used when the GUI tab pages line is displayed.  'e' must be
-        present in 'guioptions'.  For the non-GUI tab pages line 'tabline' is
+        Only used when the GUI tabpages line is displayed.  'e' must be
+        present in 'guioptions'.  For the non-GUI tabpages line 'tabline' is
         used.
       ]=],
       full_name = 'guitablabel',
       modelineexpr = true,
       redraw = { 'current_window' },
       scope = { 'global' },
-      short_desc = N_('GUI: custom label for a tab page'),
+      short_desc = N_('GUI: custom label for a tabpage'),
       type = 'string',
       immutable = true,
     },
@@ -4251,8 +4218,8 @@ local options = {
       abbreviation = 'gtt',
       defaults = '',
       desc = [=[
-        When non-empty describes the text to use in a tooltip for the GUI tab
-        pages line.  When empty Vim will use a default tooltip.
+        When non-empty describes the text to use in a tooltip for the GUI
+        tabpages line.  When empty Vim will use a default tooltip.
         This option is otherwise just like 'guitablabel' above.
         You can include a line break.  Simplest method is to use |:let|: >vim
         	let &guitabtooltip = "line one\nline two"
@@ -4263,7 +4230,7 @@ local options = {
       modelineexpr = true,
       redraw = { 'current_window' },
       scope = { 'global' },
-      short_desc = N_('GUI: custom tooltip for a tab page'),
+      short_desc = N_('GUI: custom tooltip for a tabpage'),
       type = 'string',
       immutable = true,
     },
@@ -4283,8 +4250,6 @@ local options = {
         "$VIMRUNTIME/doc/help.txt".  If $VIMRUNTIME is not set, $VIM is also
         tried.  Also see |$VIMRUNTIME| and |option-backslash| about including
         spaces and backslashes.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'helpfile',
@@ -5038,6 +5003,7 @@ local options = {
       redraw = { 'statuslines', 'current_buffer' },
       scope = { 'buf' },
       short_desc = N_('name of a keyboard mapping'),
+      tags = { 'E544' },
       type = 'string',
       varname = 'p_keymap',
     },
@@ -5082,7 +5048,7 @@ local options = {
           which is now deprecated.)
         - ":help!" performs |:help!| (DWIM) on the |WORD| at cursor.
         - If the value starts with ":", it is invoked as an Ex command
-          prefixed with [count].
+          and [count] is passed as the first argument, if present.
         - If "man" or "man -s", [count] is the manpage section number.
 
         See |option-backslash| about including spaces and backslashes.
@@ -5092,8 +5058,6 @@ local options = {
         	set keywordprg=man\ -s
         	set keywordprg=:Man
         <
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'keywordprg',
@@ -5119,8 +5083,6 @@ local options = {
         mapped in Insert mode.
         Also consider setting 'langremap' to off, to prevent 'langmap' from
         applying to characters resulting from a mapping.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
 
         Example (for Greek, in UTF-8):				*greek*  >vim
             set langmap=ΑA,ΒB,ΨC,ΔD,ΕE,ΦF,ΓG,ΗH,ΙI,ΞJ,ΚK,ΛL,ΜM,ΝN,ΟO,ΠP,QQ,ΡR,ΣS,ΤT,ΘU,ΩV,WW,ΧX,ΥY,ΖZ,αa,βb,ψc,δd,εe,φf,γg,ηh,ιi,ξj,κk,λl,μm,νn,οo,πp,qq,ρr,σs,τt,θu,ωv,ςw,χx,υy,ζz
@@ -5576,8 +5538,6 @@ local options = {
         NOT used for the ":cf" command.  See 'errorfile' for that.
         Environment variables are expanded |:set_env|.
         See |option-backslash| about including spaces and backslashes.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'makeef',
@@ -5628,8 +5588,7 @@ local options = {
         <	The placeholder "$*" can be given (even multiple times) to specify
         where the arguments will be included, for example: >vim
             set makeprg=latex\ \\\\nonstopmode\ \\\\input\\{$*}
-        <	This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
+        <
       ]=],
       expand = true,
       full_name = 'makeprg',
@@ -5858,8 +5817,6 @@ local options = {
         <	If you have less than 512 Mbyte |:mkspell| may fail for some
         languages, no matter what you set 'mkspellmem' to.
         Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'mkspellmem',
@@ -5893,8 +5850,6 @@ local options = {
         When on allow some options that are an expression to be set in the
         modeline.  Check the option for whether it is affected by
         'modelineexpr'.  Also see |modeline|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'modelineexpr',
       scope = { 'global' },
@@ -5910,7 +5865,6 @@ local options = {
         If 'modeline' is on 'modelines' gives the number of lines that is
         checked for set commands.  If 'modeline' is off or 'modelines' is zero
         no lines are checked.  See |modeline|.
-
       ]=],
       full_name = 'modelines',
       scope = { 'global' },
@@ -6389,8 +6343,6 @@ local options = {
         more information.
         This option is usually set by a filetype plugin:
         |:filetype-plugin-on|
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'omnifunc',
       func = true,
@@ -6426,9 +6378,6 @@ local options = {
         See |:map-operator| for more info and an example.  The value can be
         the name of a function, a |lambda| or a |Funcref|.  See
         |option-value-function| for more information.
-
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'operatorfunc',
       func = true,
@@ -6451,8 +6400,6 @@ local options = {
         Directories used to find packages.
         See |packages| and |packages-runtimepath|.
         Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'packpath',
@@ -6502,8 +6449,6 @@ local options = {
       desc = [=[
         Expression which is evaluated to apply a patch to a file and generate
         the resulting new version of the file.  See |diff-patchexpr|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'patchexpr',
       scope = { 'global' },
@@ -6760,9 +6705,6 @@ local options = {
         Specifies the python version used for pyx* functions and commands
         |python_x|.  As only Python 3 is supported, this always has the value
         `3`. Setting any other value is an error.
-
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'pyxversion',
       scope = { 'global' },
@@ -6787,9 +6729,6 @@ local options = {
 
         It is not allowed to change text or jump to another window while
         evaluating 'qftf' |textlock|.
-
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'quickfixtextfunc',
       func = true,
@@ -7187,8 +7126,6 @@ local options = {
 
         With |--clean| the home directory entries are not included.
         Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = 'nodefault',
       full_name = 'runtimepath',
@@ -7475,9 +7412,9 @@ local options = {
         		will become the current directory (useful with
         		projects accessed over a network from different
         		systems)
-           tabpages	all tab pages; without this only the current tab page
+           tabpages	all tabpages; without this only the current tabpage
         		is restored, so that you can make a session for each
-        		tab page separately
+        		tabpage separately
            terminal	include terminal windows where the command can be
         		restored
            winpos	position of the whole Vim window
@@ -7612,9 +7549,6 @@ local options = {
 
         When setting 'shada' from an empty value you can use |:rshada| to
         load the contents of the file, this is not done automatically.
-
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'shada',
       list = 'onecomma',
@@ -7636,8 +7570,6 @@ local options = {
         This option can be set with the |-i| command line flag.  The |--clean|
         command line flag sets it to "NONE".
         Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'shadafile',
@@ -7710,8 +7642,6 @@ local options = {
            " Workaround (may not be needed in future version of pwsh):
            let $__SuppressAnsiEscapeSequences = 1
         <
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'shell',
@@ -7740,8 +7670,6 @@ local options = {
         See |option-backslash| about including spaces and backslashes.
         See |shell-unquoting| which talks about separating this option into
         multiple arguments.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'shellcmdflag',
       scope = { 'global' },
@@ -7752,6 +7680,7 @@ local options = {
     },
     {
       abbreviation = 'sp',
+      cb = 'did_set_shellpipe_redir',
       defaults = {
         condition = 'MSWIN',
         if_false = '| tee',
@@ -7788,8 +7717,7 @@ local options = {
         Note: When using a pipe like "| tee", you'll lose the exit code of the
         shell command.  This might be configurable by your shell, look for
         the pipefail option (for bash and zsh, use ":set -o pipefail").
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
+        Only a single "%s" value is allowed.
       ]=],
       full_name = 'shellpipe',
       scope = { 'global' },
@@ -7815,8 +7743,6 @@ local options = {
         or bash, where it should be "\"".  The default is adjusted according
         the value of 'shell', to reduce the need to set this option by the
         user.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'shellquote',
       scope = { 'global' },
@@ -7827,6 +7753,7 @@ local options = {
     },
     {
       abbreviation = 'srr',
+      cb = 'did_set_shellpipe_redir',
       defaults = {
         condition = 'MSWIN',
         if_false = '>',
@@ -7853,8 +7780,8 @@ local options = {
         explicitly set before.
         In the future pipes may be used for filtering and this option will
         become obsolete (at least for Unix).
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
+        							*E1577*
+        Only a single "%s" item is allowed in the option value.
       ]=],
       full_name = 'shellredir',
       scope = { 'global' },
@@ -7921,8 +7848,6 @@ local options = {
         When 'shellxquote' is set to "(" then the characters listed in this
         option will be escaped with a '^' character.  This makes it possible
         to execute most external commands with cmd.exe.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'shellxescape',
       scope = { 'global' },
@@ -7947,8 +7872,6 @@ local options = {
         When the value is '(' then ')' is appended.  When the value is '"('
         then ')"' is appended.
         When the value is '(' then also see 'shellxescape'.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'shellxquote',
       scope = { 'global' },
@@ -7992,8 +7915,9 @@ local options = {
       cb = 'did_set_shortmess',
       defaults = 'ltToOCF',
       desc = [=[
-        This option helps to avoid all the |hit-enter| prompts caused by file
-        messages, for example with CTRL-G, and to avoid some other messages.
+        Controls display of file messages (e.g. CTRL-G) and various other
+        messages.
+
         It is a list of flags:
          flag	meaning when present	~
           l	use "999L, 888B" instead of "999 lines, 888 bytes"	*shm-l*
@@ -8198,19 +8122,15 @@ local options = {
       cb = 'did_set_showtabline',
       defaults = 1,
       desc = [=[
-        The value of this option specifies when the line with tab page labels
-        will be displayed:
+        Specifies when the |tabpage| labels will be displayed:
         	0: never
-        	1: only if there are at least two tab pages
+        	1: only if there are at least two tabpages
         	2: always
-        This is both for the GUI and non-GUI implementation of the tab pages
-        line.
-        See |tab-page| for more information about tab pages.
       ]=],
       full_name = 'showtabline',
       redraw = { 'all_windows', 'ui_option' },
       scope = { 'global' },
-      short_desc = N_('tells when the tab pages line is displayed'),
+      short_desc = N_('tells when the tabpages line is displayed'),
       type = 'number',
       varname = 'p_stal',
     },
@@ -8488,8 +8408,6 @@ local options = {
         'spellfile' is set to it, for entries in 'spelllang' only files
         without region name will be found.
         Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'spellfile',
@@ -8649,8 +8567,6 @@ local options = {
         appear several times in any order.  Example: >vim
         	set sps=file:~/.config/nvim/sugg,best,expr:MySuggest()
         <	Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'spellsuggest',
@@ -8658,6 +8574,7 @@ local options = {
       scope = { 'global' },
       secure = true,
       short_desc = N_('method(s) used to suggest spelling corrections'),
+      tags = { 'E5700' },
       type = 'string',
       varname = 'p_sps',
     },
@@ -8825,8 +8742,8 @@ local options = {
           %-0{minwid}.{maxwid}{item}
         <
         All fields except {item} are optional.  Use "%%" to show a literal "%"
-        char.  Setting this option to empty (`:set statusline=`) sets its
-        value to the default.
+        char.  Setting to empty (`:set statusline=`) sets the global value to
+        the default.
 
         						*stl-%!*
         When the option starts with "%!" then it is used as an expression,
@@ -8922,14 +8839,14 @@ local options = {
         ( -   Start of item group.  Can be used for setting the width and
               alignment of a section.  Must be followed by %) somewhere.
         ) -   End of item group.  No width fields allowed.
-        T N   For 'tabline': start of tab page N label.  Use %T or %X to end
+        T N   For 'tabline': start of tabpage N label.  Use %T or %X to end
               the label.  Clicking this label with left mouse button switches
-              to the specified tab page, while clicking it with middle mouse
-              button closes the specified tab page.
+              to the specified tabpage, while clicking it with middle mouse
+              button closes the specified tabpage.
         X N   For 'tabline': start of close tab N label.  Use %X or %T to end
               the label, e.g.: %3Xclose%X.  Use %999X for a "close current
               tab" label.  Clicking this label with left mouse button closes
-              the specified tab page.
+              the specified tabpage.
         @ N   Start of execute function label. Use %X or %T to end the label,
               e.g.: %10@SwitchBuffer@foo.c%X.  Clicking this label runs the
               specified function: in the example when clicking once using left
@@ -8955,7 +8872,7 @@ local options = {
                  added without modifying code that reacts on mouse clicks on
                  this label.
               Use |getmousepos()|.winid in the specified function to get the
-              corresponding window id of the clicked item.
+              corresponding |window-ID| of the clicked item.
         \< -   Where to truncate line if too long.  Default is at the start.
               No width fields allowed.
         = -   Separation point between alignment sections.  Each section will
@@ -9131,18 +9048,18 @@ local options = {
           |:sbnext|, or |:sbrewind|).
         Possible values (comma-separated list):
            useopen	If included, jump to the first open window in the
-        		current tab page that contains the specified buffer
+        		current tabpage that contains the specified buffer
         		(if there is one).  Otherwise: Do not examine other
         		windows.
-           usetab	Like "useopen", but also consider windows in other tab
-        		pages.
+           usetab	Like "useopen", but also consider windows in other
+        		tabpages.
            split	If included, split the current window before loading
         		a buffer for a |quickfix| command that display errors.
         		Otherwise: do not split, use current window (when used
         		in the quickfix window: the previously used window or
         		split if there is no other window).
            vsplit	Just like "split" but split vertically.
-           newtab	Like "split", but open a new tab page.  Overrules
+           newtab	Like "split", but open a new tabpage.  Overrules
         		"split" when both are present.
            uselast	If included, jump to the previously used window when
         		jumping to errors with |quickfix| commands.
@@ -9219,20 +9136,20 @@ local options = {
       flags = true,
       deny_duplicates = true,
       desc = [=[
-        This option controls the behavior when closing tab pages (e.g., using
-        |:tabclose|).  When empty Vim goes to the next (right) tab page.
+        This option controls the behavior when closing tabpages (e.g., using
+        |:tabclose|).  When empty Vim goes to the next (right) tabpage.
 
         Possible values (comma-separated list):
-           left		If included, go to the previous tab page instead of
+           left		If included, go to the previous tabpage instead of
         		the next one.
-           uselast	If included, go to the previously used tab page if
+           uselast	If included, go to the previously used tabpage if
         		possible.  This option takes precedence over the
         		others.
       ]=],
       full_name = 'tabclose',
       list = 'onecomma',
       scope = { 'global' },
-      short_desc = N_('which tab page to focus when closing a tab'),
+      short_desc = N_('which tabpage to focus when closing a tab'),
       type = 'string',
       varname = 'p_tcl',
       flags_varname = 'tcl_flags',
@@ -9242,14 +9159,14 @@ local options = {
       cb = 'did_set_tabline',
       defaults = '',
       desc = [=[
-        When non-empty, this option determines the content of the tab pages
+        When non-empty, this option determines the content of the tabpages
         line at the top of the Vim window.  When empty Vim will use a default
-        tab pages line.  See |setting-tabline| for more info.
+        tabpages line.  See |setting-tabline| for more info.
 
-        The tab pages line only appears as specified with the 'showtabline'
+        The tabpages line only appears as specified with the 'showtabline'
         option and only when there is no GUI tab line.  When 'e' is in
         'guioptions' and the GUI supports a tab line 'guitablabel' is used
-        instead.  Note that the two tab pages lines are very different.
+        instead.  Note that the two tabpages lines are very different.
 
         The value is evaluated like with 'statusline'.  You can use
         |tabpagenr()|, |tabpagewinnr()| and |tabpagebuflist()| to figure out
@@ -9260,14 +9177,14 @@ local options = {
         trigger it to be updated, use |:redrawtabline|.
         This option cannot be set in a modeline when 'modelineexpr' is off.
 
-        Keep in mind that only one of the tab pages is the current one, others
+        Keep in mind that only one of the tabpages is the current one, others
         are invisible and you can't jump to their windows.
       ]=],
       full_name = 'tabline',
       modelineexpr = true,
       redraw = { 'tabline' },
       scope = { 'global' },
-      short_desc = N_('custom format for the console tab pages line'),
+      short_desc = N_('custom format for the console tabpages line'),
       type = 'string',
       varname = 'p_tal',
     },
@@ -9275,12 +9192,12 @@ local options = {
       abbreviation = 'tpm',
       defaults = 50,
       desc = [=[
-        Maximum number of tab pages to be opened by the |-p| command line
+        Maximum number of tabpages to be opened by the |-p| command line
         argument or the ":tab all" command. |tabpage|
       ]=],
       full_name = 'tabpagemax',
       scope = { 'global' },
-      short_desc = N_('maximum number of tab pages for |-p| and "tab all"'),
+      short_desc = N_('maximum number of tabpages for |-p| and "tab all"'),
       type = 'number',
       varname = 'p_tpm',
     },
@@ -9396,8 +9313,6 @@ local options = {
         function and an example.  The value can be the name of a function, a
         |lambda| or a |Funcref|.  See |option-value-function| for more
         information.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'tagfunc',
       func = true,
@@ -9643,9 +9558,6 @@ local options = {
         with CTRL-X CTRL-T.  |i_CTRL-X_CTRL-T| See |compl-thesaurusfunc|.
         The value can be the name of a function, a |lambda| or a |Funcref|.
         See |option-value-function| for more information.
-
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'thesaurusfunc',
       func = true,
@@ -9743,8 +9655,6 @@ local options = {
       desc = [=[
         If not empty, this option will be used to set the window title when
         exiting.  Only if 'title' is enabled.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       full_name = 'titleold',
       no_mkrc = true,
@@ -9765,7 +9675,7 @@ local options = {
         error will be given.
 
         The default (empty) behaviour is equivalent to: >vim
-            set titlestring=%t%(\ %M%)%(\ \(%{expand(\"%:~:h\")}\)%)%a\ -\ Nvim
+            set titlestring=%t%(\ %M%)%(\ \(%{expand('%:p:~:h')}\)%)%a\ -\ Nvim
         <
         Example: >vim
             auto BufEnter * let &titlestring = hostname() .. "/" .. expand("%:p")
@@ -9831,12 +9741,29 @@ local options = {
     {
       abbreviation = 'tf',
       defaults = true,
+      desc = [=[
+        Enables Nvim |TUI| features which assume a fast (usually local) host
+        terminal. During startup, Nvim queries the terminal (for 'background'
+        detection, etc.) and must wait for a response (or timeout).
+
+        If your terminal environment is slow (e.g. remote SSH), or broken
+        (doesn't respond to queries), Nvim startup may be slower. Therefore
+        you can disable this option by setting the `$NVIM_NOTTYFAST`
+        environment variable before starting Nvim: >
+        	NVIM_NOTTYFAST=1 nvim
+        <
+
+        The queries are performed early, before |--cmd| and user |config|, so
+        `:set nottyfast` in your config happens too late.
+      ]=],
       full_name = 'ttyfast',
       no_mkrc = true,
       scope = { 'global' },
-      short_desc = N_('Deprecated'),
+      short_desc = N_('assume terminal responds quickly, enabling more features'),
+      -- Vim E1568: https://github.com/vim/vim/blob/0f9218851dc91a855c3d186ccd05f550907cf37e/src/errors.h#L3791
+      tags = { 'E1568', '$NVIM_NOTTYFAST' },
       type = 'boolean',
-      immutable = true,
+      varname = 'p_tf',
     },
     {
       abbreviation = 'udir',
@@ -9858,8 +9785,6 @@ local options = {
         given, no further entry is used.
         See |undo-persistence|.
         Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
 
         Note that unlike 'directory' and 'backupdir', 'undodir' always acts as
         though the trailing slashes are present (see 'backupdir' for what this
@@ -10089,8 +10014,6 @@ local options = {
         The difference with |:redir| is that verbose messages are not
         displayed when 'verbosefile' is set.
         Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = true,
       full_name = 'verbosefile',
@@ -10106,8 +10029,6 @@ local options = {
       desc = [=[
         Name of the directory where to store files for |:mkview|.
         Environment variables are expanded |:set_env|.
-        This option cannot be set from a |modeline| or in the |sandbox|, for
-        security reasons.
       ]=],
       expand = 'nodefault',
       full_name = 'viewdir',

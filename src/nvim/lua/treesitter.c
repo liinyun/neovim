@@ -385,7 +385,14 @@ static int tslua_push_parser(lua_State *L)
 #ifdef HAVE_WASMTIME
   if (ts_language_is_wasm(lang)) {
     assert(wasmengine != NULL);
-    ts_parser_set_wasm_store(*parser, ts_wasmstore);
+    TSWasmError werr = { 0 };
+    TSWasmStore *store = ts_wasm_store_new(wasmengine, &werr);
+    if (werr.kind != TSWasmErrorKindNone) {
+      ts_parser_delete(*parser);
+      return luaL_error(L, "Failed to create WASM store: (%s) %s",
+                        wasmerr_to_str(werr.kind), werr.message);
+    }
+    ts_parser_set_wasm_store(*parser, store);
   }
 #endif
 
@@ -400,10 +407,10 @@ static int tslua_push_parser(lua_State *L)
   return 1;
 }
 
-static TSParser *parser_check(lua_State *L, uint16_t index)
+static TSParser *parser_check(lua_State *L, int index)
 {
   TSParser **ud = luaL_checkudata(L, index, TS_META_PARSER);
-  luaL_argcheck(L, *ud, index, "TSParser expected");
+  luaL_argcheck(L, *ud != NULL, index, "Parser has been deleted");
   return *ud;
 }
 
@@ -420,9 +427,12 @@ static void logger_gc(TSLogger logger)
 
 static int parser_gc(lua_State *L)
 {
-  TSParser *p = parser_check(L, 1);
-  logger_gc(ts_parser_logger(p));
-  ts_parser_delete(p);
+  TSParser **ud = luaL_checkudata(L, 1, TS_META_PARSER);
+  if (*ud) {
+    logger_gc(ts_parser_logger(*ud));
+    ts_parser_delete(*ud);
+    *ud = NULL;
+  }
   return 0;
 }
 
@@ -476,20 +486,20 @@ static void push_ranges(lua_State *L, const TSRange *ranges, const size_t length
   for (size_t i = 0; i < length; i++) {
     lua_createtable(L, include_bytes ? 6 : 4, 0);
     int j = 1;
-    lua_pushinteger(L, ranges[i].start_point.row);
+    lua_pushnumber(L, (lua_Number)ranges[i].start_point.row);
     lua_rawseti(L, -2, j++);
-    lua_pushinteger(L, ranges[i].start_point.column);
+    lua_pushnumber(L, (lua_Number)ranges[i].start_point.column);
     lua_rawseti(L, -2, j++);
     if (include_bytes) {
-      lua_pushinteger(L, ranges[i].start_byte);
+      lua_pushnumber(L, (lua_Number)ranges[i].start_byte);
       lua_rawseti(L, -2, j++);
     }
-    lua_pushinteger(L, ranges[i].end_point.row);
+    lua_pushnumber(L, (lua_Number)ranges[i].end_point.row);
     lua_rawseti(L, -2, j++);
-    lua_pushinteger(L, ranges[i].end_point.column);
+    lua_pushnumber(L, (lua_Number)ranges[i].end_point.column);
     lua_rawseti(L, -2, j++);
     if (include_bytes) {
-      lua_pushinteger(L, ranges[i].end_byte);
+      lua_pushnumber(L, (lua_Number)ranges[i].end_byte);
       lua_rawseti(L, -2, j++);
     }
 
@@ -596,6 +606,16 @@ static void range_err(lua_State *L)
   luaL_error(L, "Ranges can only be made from 6 element long tables or nodes.");
 }
 
+static uint32_t lua_checkuint32(lua_State *L, int index)
+{
+  lua_Number value = luaL_checknumber(L, index);
+  uint32_t converted = (uint32_t)value;
+  if (value < 0 || value > (lua_Number)UINT32_MAX || (lua_Number)converted != value) {
+    luaL_error(L, "Range value out of bounds");
+  }
+  return converted;
+}
+
 // Use the top of the stack (without popping it) to create a TSRange, it can be
 // either a lua table or a TSNode
 static void range_from_lua(lua_State *L, TSRange *range)
@@ -609,27 +629,27 @@ static void range_from_lua(lua_State *L, TSRange *range)
     }
 
     lua_rawgeti(L, -1, 1);  // [ range, start_row]
-    uint32_t start_row = (uint32_t)luaL_checkinteger(L, -1);
+    uint32_t start_row = lua_checkuint32(L, -1);
     lua_pop(L, 1);
 
     lua_rawgeti(L, -1, 2);  // [ range, start_col]
-    uint32_t start_col = (uint32_t)luaL_checkinteger(L, -1);
+    uint32_t start_col = lua_checkuint32(L, -1);
     lua_pop(L, 1);
 
     lua_rawgeti(L, -1, 3);  // [ range, start_byte]
-    uint32_t start_byte = (uint32_t)luaL_checkinteger(L, -1);
+    uint32_t start_byte = lua_checkuint32(L, -1);
     lua_pop(L, 1);
 
     lua_rawgeti(L, -1, 4);  // [ range, end_row]
-    uint32_t end_row = (uint32_t)luaL_checkinteger(L, -1);
+    uint32_t end_row = lua_checkuint32(L, -1);
     lua_pop(L, 1);
 
     lua_rawgeti(L, -1, 5);  // [ range, end_col]
-    uint32_t end_col = (uint32_t)luaL_checkinteger(L, -1);
+    uint32_t end_col = lua_checkuint32(L, -1);
     lua_pop(L, 1);
 
     lua_rawgeti(L, -1, 6);  // [ range, end_byte]
-    uint32_t end_byte = (uint32_t)luaL_checkinteger(L, -1);
+    uint32_t end_byte = lua_checkuint32(L, -1);
     lua_pop(L, 1);  // [ range ]
 
     *range = (TSRange) {

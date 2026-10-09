@@ -84,11 +84,15 @@ function M.check_targets()
     local win = api.nvim_win_is_valid(M.wins[type]) and M.wins[type]
     local floating = win and api.nvim_win_get_config(win).zindex
     local setopt = not buf or not win or not floating
-    M.bufs[type] = buf or api.nvim_create_buf(false, false)
+    M.bufs[type] = buf
+      or (function(b)
+        vim.bo[b].modeline = false
+        return b
+      end)(api.nvim_create_buf(false, false))
 
     if not win or not floating then
       -- Open a new window when closed or no longer floating (e.g. wincmd J).
-      local cfg = { col = 0, row = 1, width = 10000, height = 1, mouse = false, noautocmd = true }
+      local cfg = { col = 0, row = 1, width = 10000, height = 1, noautocmd = true }
       cfg.focusable = false
       cfg.style = 'minimal'
       cfg.relative = 'laststatus'
@@ -237,8 +241,12 @@ function M.enable(opts)
 
   api.nvim_create_autocmd({ 'VimResized', 'TabEnter' }, {
     group = M.augroup,
-    callback = function()
+    callback = function(ev)
       M.check_targets()
+      -- After a tabpage was closed unhide the msg window on the current tabpage.
+      if ev.event == 'TabEnter' and next(M.msg.msg.ids) ~= nil then
+        api.nvim_win_set_config(M.wins.msg, { hide = false, width = M.msg.msg.width })
+      end
       M.msg.set_pos()
     end,
     desc = 'Set cmdline and message window dimensions after shell resize or tabpage change.',

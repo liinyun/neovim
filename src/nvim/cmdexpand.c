@@ -1480,11 +1480,12 @@ static const char *set_cmd_index(const char *cmd, exarg_T *eap, expand_T *xp, in
   // Isolate the command and search for it in the command table.
   // Exceptions:
   // - the 'k' command can directly be followed by any character, but do
-  // accept "keepmarks", "keepalt" and "keepjumps". As fuzzy matching can
-  // find matches anywhere in the command name, do this only for command
-  // expansion based on regular expression and not for fuzzy matching.
+  // accept "keepmarks", "keepalt" and "keepjumps". Bypass also when
+  // 'ignorecase' is set so a lowercase ":kz" still completes a user
+  // command like :Kz, and for fuzzy matching as that can find
+  // matches anywhere in the command name.
   // - the 's' command can be followed directly by 'c', 'g', 'i', 'I' or 'r'
-  if (!fuzzy && (*cmd == 'k' && cmd[1] != 'e')) {
+  if (!fuzzy && !p_ic && (*cmd == 'k' && cmd[1] != 'e')) {
     eap->cmdidx = CMD_k;
     p = cmd + 1;
   } else {
@@ -3509,16 +3510,8 @@ static int ExpandUserDefined(const char *const pat, expand_T *xp, regmatch_T *re
   return OK;
 }
 
-/// Expand names with a list returned by a function defined by the user.
-static int ExpandUserList(expand_T *xp, char ***matches, int *numMatches)
+static void process_user_list(list_T *retlist, char ***matches, int *numMatches)
 {
-  *matches = NULL;
-  *numMatches = 0;
-  list_T *const retlist = call_user_expand_func(call_func_retlist, xp);
-  if (retlist == NULL) {
-    return FAIL;
-  }
-
   garray_T ga;
   ga_init(&ga, (int)sizeof(char *), 3);
   // Loop over the items in the list.
@@ -3535,10 +3528,23 @@ static int ExpandUserList(expand_T *xp, char ***matches, int *numMatches)
 
   *matches = ga.ga_data;
   *numMatches = ga.ga_len;
+}
+
+/// Expand names with a list returned by a function defined by the user.
+static int ExpandUserList(expand_T *xp, char ***matches, int *numMatches)
+{
+  *matches = NULL;
+  *numMatches = 0;
+  list_T *const retlist = call_user_expand_func(call_func_retlist, xp);
+  if (retlist == NULL) {
+    return FAIL;
+  }
+
+  process_user_list(retlist, matches, numMatches);
   return OK;
 }
 
-static int ExpandUserLua(expand_T *xp, int *num_file, char ***file)
+static int ExpandUserLua(expand_T *xp, int *numMatches, char ***matches)
 {
   typval_T rettv = TV_INITIAL_VALUE;
   nlua_call_user_expand_func(xp, &rettv);
@@ -3549,21 +3555,7 @@ static int ExpandUserLua(expand_T *xp, int *num_file, char ***file)
 
   list_T *const retlist = rettv.vval.v_list;
 
-  garray_T ga;
-  ga_init(&ga, (int)sizeof(char *), 3);
-  // Loop over the items in the list.
-  TV_LIST_ITER_CONST(retlist, li, {
-    if (TV_LIST_ITEM_TV(li)->v_type != VAR_STRING
-        || TV_LIST_ITEM_TV(li)->vval.v_string == NULL) {
-      continue;  // Skip non-string items and empty strings.
-    }
-
-    GA_APPEND(char *, &ga, xstrdup(TV_LIST_ITEM_TV(li)->vval.v_string));
-  });
-  tv_list_unref(retlist);
-
-  *file = ga.ga_data;
-  *num_file = ga.ga_len;
+  process_user_list(retlist, matches, numMatches);
   return OK;
 }
 
